@@ -1,0 +1,11 @@
+[workspace]
+members = ["libs/agent", "bins/omh"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+
+[workspace.dependencies]
+agent = { path = "libs/agent" }
+crossterm = "0.29.0"
+ratatui = "0.29.0"

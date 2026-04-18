@@ -1,0 +1,9 @@
+[package]
+name = "omh"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent = { workspace = true }
+crossterm = { workspace = true }
+ratatui = { workspace = true }
