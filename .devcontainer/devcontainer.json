@@ -1,0 +1,24 @@
+{
+    "name": "${localWorkspaceFolderBasename}", // The name just for VS Code display, not for container name.
+    "initializeCommand": "bash .devcontainer/scripts/init.sh",
+    "dockerComposeFile": "../.devcontainer.compose.yml",
+    "service": "devcontainer",
+    "shutdownAction": "stopCompose",
+    "overrideCommand": false,
+    "workspaceFolder": "/home/${localEnv:USER:vscode}/${localWorkspaceFolderBasename}",
+    "postCreateCommand": "bash .devcontainer/scripts/postCreate.sh",
+    "customizations": {
+        "vscode": {
+            // These options can't be set on workspace
+            "settings": {
+                // "http.proxySupport": "on",
+                // "remote.restoreForwardedPorts": false
+            },
+            // common extensions you want installed when the container is created.
+            "extensions": [
+                // "MS-CEINTL.vscode-language-pack-zh-hans"
+            ]
+        }
+    },
+    "postStartCommand": "bash .devcontainer/scripts/postStart.sh"
+}

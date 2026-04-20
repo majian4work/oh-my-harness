@@ -1,0 +1,56 @@
+name: __DEVCONTAINER_USER__-__WORKSPACE_BASENAME__
+
+services:
+  devcontainer:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+      args:
+        BASE_IMAGE: __BASE_IMAGE__
+        USER: __DEVCONTAINER_USER__
+        USERID: __USERID__
+        GROUPID: __GROUPID__
+        http_proxy: __http_proxy__
+        https_proxy: __https_proxy__
+        no_proxy: __no_proxy__
+    privileged: true
+    cap_add:
+      - SYS_PTRACE
+      # PTI / unitrace / VTune style profiling may need perf_event access even when
+      # compute itself only needs /dev/dri. Keep this capability enabled so common
+      # XPU profiling flows work for the non-root container user without extra patching.
+      - CAP_PERFMON
+    security_opt:
+      - seccomp=unconfined
+    hostname: dev
+    ipc: host
+    network_mode: host
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      # /dev/dri/card* is typically owned by the host's video group. Non-root users
+      # need this supplementary GID so Level Zero / DRM can open the primary GPU nodes.
+      - __VIDEO_GID__
+      # /dev/dri/renderD* is typically owned by the host's render group, often with a
+      # numeric GID that does not exist by name inside the container. Passing the host
+      # GID here lets the non-root container user access the XPU render nodes directly.
+      - __RENDER_GID__
+    entrypoint:
+      - /bin/bash
+      - -lc
+    command:
+      - |
+        trap 'exit 0' TERM INT
+        while sleep 1000; do :; done
+    working_dir: __DEVCONTAINER_HOME__/__WORKSPACE_BASENAME__
+    env_file:
+      - .devcontainer.runtime.env
+    volumes:
+      - /dev/dri/by-path:/dev/dri/by-path
+      - __HOST_HOME__:__DEVCONTAINER_HOME__/.host:ro
+      - __SSH_SOURCE__:__DEVCONTAINER_HOME__/.ssh
+      - __GITCONFIG_SOURCE__:__DEVCONTAINER_HOME__/.gitconfig:ro
+      - __HF_HOME__:__DEVCONTAINER_HOME__/.cache/huggingface
+      - __CCACHE_DIR__:__DEVCONTAINER_HOME__/.cache/ccache
+      - __WORKSPACE_DIR__:__DEVCONTAINER_HOME__/__WORKSPACE_BASENAME__
+      - __WORKSPACE_DIR__/.devcontainer:__DEVCONTAINER_HOME__/__WORKSPACE_BASENAME__/.devcontainer

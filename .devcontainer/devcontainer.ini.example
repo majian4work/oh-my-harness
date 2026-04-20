@@ -1,0 +1,39 @@
+# INI-style config parsed by .devcontainer/scripts/init.sh on the host before
+# docker compose starts.
+#
+# Supported sections:
+# - [build] : build args and bootstrap knobs for the devcontainer image/setup
+# - [host]  : host-side mount/cache paths
+# - [env]   : runtime env vars written into .devcontainer.runtime.env
+
+[build]
+BASE_IMAGE = intel/vllm:latest
+
+# Extra config bundles installed by postCreate.sh. Workspace config is always
+# included. Example: python,rust
+INCLUDE = python
+
+[host]
+# Host-side Hugging Face cache directory mounted into the fixed in-container
+# path /home/$USER/.cache/huggingface. This is a mount source only and is not
+# exported as HF_HOME inside the container.
+HF_HOME = ~/.cache/huggingface
+
+# Host-side ccache directory mounted into the fixed in-container path
+# /home/$USER/.cache/ccache. This is a mount source only and is not exported
+# as CCACHE_DIR inside the container.
+# CCACHE_DIR = ~/.cache/ccache
+
+[env]
+# Runtime env vars available to commands inside the container.
+
+# Optional token consumed inside the container by setup tools such as mise,
+# gh, and other commands that need GitHub auth.
+# Minimal gh CLI scopes: repo, read:org
+# GITHUB_TOKEN = XXXXXXXX
+
+MAX_JOBS = 5
+OMO_DISABLE_POSTHOG = 1
+VLLM_TARGET_DEVICE = xpu
+VLLM_XPU_AOT_DEVICES = bmg,bmg-g21-a0,bmg-g31-a0
+OPENCODE_DISABLE_CLAUDE_CODE = 1

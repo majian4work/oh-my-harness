@@ -1,0 +1,121 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "[python] attach local",
+            "type": "debugpy",
+            "request": "attach",
+            "processId": "${command:pickProcess}"
+        },
+        {
+            "name": "[python] attach remote",
+            "type": "debugpy",
+            "request": "attach",
+            "connect": {
+                "host": "localhost",
+                "port": 5678
+            },
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}",
+                    "remoteRoot": "${workspaceFolder}"
+                }
+            ]
+        },
+        {
+            "name": "[gdb] Start",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build-Debug/XXXTest",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "text": "-gdb-set print elements 0",
+                    "ignoreFailures": true
+                },
+                {
+                    "text": "-gdb-set print repeats 0",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "[gdb] Attach",
+            "type": "cppdbg",
+            "request": "attach",
+            "program": "python",
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "ignore SIGSEGV signal",
+                    "text": "handle SIGSEGV nostop noprint pass",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "[gdbserver] Attach",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "python",
+            "miDebuggerServerAddress": ":2345",
+            "MIMode": "gdb",
+            "cwd": "${workspaceFolder}",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set disassembly flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Ignore SIGSEGV signal",
+                    "text": "handle SIGSEGV nostop noprint pass",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "type": "cppdbg",
+            "request": "launch",
+            "name": "Core dump(python)",
+            "program": "python",
+            "coreDumpPath": "${input:coreFileName}",
+            "cwd": "${workspaceFolder}",
+            "MIMode": "gdb" // or lldb, if you are using lldb
+            // https://stackoverflow.com/questions/55736235/how-do-you-debug-a-linux-core-dump-using-vscode
+        }
+    ],
+    "inputs": [
+        {
+            "id": "coreFileName",
+            "type": "promptString",
+            "description": "Enter core file path"
+        }
+    ]
+}

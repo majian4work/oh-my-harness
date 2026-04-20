@@ -1,0 +1,22 @@
+#!/usr/bin/env -S just --justfile
+# ^ A shebang isn't required, but allows a justfile to be executed
+#   like a script, with `./justfile test`, for example.
+
+set positional-arguments := true
+
+workspace_root := justfile_directory()
+
+# alias b := build
+
+default:
+    @just --justfile {{justfile()}} --list
+
+docker-attach:
+    cd {{workspace_root}} && ./devcontainer/bin/devcontainer.sh attach
+
+# Build and run the TUI
+omh *args:
+    cargo run -p omh -- "$@"
+
+test PROMPT="Parse this project and summarize its main components and functionality into test_summary.md":
+    cargo run -p omh -- --log trace cli "{{PROMPT}}"
