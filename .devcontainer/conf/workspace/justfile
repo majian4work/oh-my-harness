@@ -16,7 +16,10 @@ docker-attach:
 
 # Build and run the TUI
 omh *args:
-    cargo run -p omh -- "$@"
+    cargo run -r -p omh -- -c "$@"
 
 test PROMPT="Parse this project and summarize its main components and functionality into test_summary.md":
-    cargo run -p omh -- --log trace cli "{{PROMPT}}"
+    cargo run -r -p omh -- --log trace cli "{{PROMPT}}"
+
+diagnose SESSION_ID:
+    cargo run -r -p omh -- diagnose "{{SESSION_ID}}"

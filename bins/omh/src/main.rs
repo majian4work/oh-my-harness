@@ -1,59 +1,186 @@
-use std::{io, time::Duration};
+mod auth;
+mod cli;
+mod commands;
+mod slash;
+mod tui;
 
-use crossterm::{
-    event::{self, Event, KeyCode},
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
+use runtime::Harness;
+use tracing::Level;
+
+use crate::{
+    cli::run_cli,
+    commands::{cmd_auth, cmd_diagnose, cmd_evolution, cmd_memory, cmd_sessions, cmd_snapshot, cmd_update_best_models},
+    tui::run_tui,
 };
-use ratatui::{
-    Terminal,
-    backend::CrosstermBackend,
-    text::Line,
-    widgets::{Block, Borders, Paragraph},
-};
 
-type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
+#[derive(Debug, Parser)]
+#[command(name = "omh", about = "The orchestration framework for AI agents")]
+struct Args {
+    #[command(subcommand)]
+    mode: Option<Mode>,
 
-fn main() -> io::Result<()> {
-    let mut terminal = init_terminal()?;
-    let run_result = run(&mut terminal);
-    let restore_result = restore_terminal(&mut terminal);
+    /// Log level: error, warn, info, debug, trace
+    #[arg(long, default_value = "info")]
+    log: String,
 
-    run_result.and(restore_result)
+    /// Continue the most recent session
+    #[arg(short, long)]
+    r#continue: bool,
 }
 
-fn init_terminal() -> io::Result<AppTerminal> {
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    Terminal::new(CrosstermBackend::new(stdout))
+#[derive(Debug, Subcommand)]
+enum Mode {
+    /// Terminal UI (default when no command given)
+    Tui {
+        /// Resume a specific session (interactive selection)
+        #[arg(short, long)]
+        resume: bool,
+    },
+    /// One-shot CLI interaction
+    Cli {
+        /// The prompt to send
+        prompt: String,
+        /// Agent to use
+        #[arg(short, long, default_value = "orchestrator")]
+        agent: String,
+    },
+    /// List recent sessions
+    Sessions {
+        /// Max sessions to show
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+    },
+    /// Memory management
+    #[command(subcommand)]
+    Memory(MemoryCmd),
+    /// Evolution management
+    #[command(subcommand)]
+    Evolution(EvolutionCmd),
+    /// Snapshot management
+    #[command(subcommand)]
+    Snapshot(SnapshotCmd),
+    /// Provider authentication management
+    #[command(subcommand)]
+    Auth(AuthCmd),
+    /// Refresh model cache and optimize agent model assignments
+    UpdateBestModels {
+        #[arg(short, long)]
+        global: bool,
+    },
+    /// Analyze session dumps for model behavior anomalies
+    Diagnose {
+        /// Session ID to analyze
+        session_id: String,
+    },
 }
 
-fn restore_terminal(terminal: &mut AppTerminal) -> io::Result<()> {
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()
+#[derive(Debug, Subcommand)]
+pub(crate) enum MemoryCmd {
+    List,
+    Search { query: String },
+    Add { content: String },
+    Forget { id: String },
 }
 
-fn run(terminal: &mut AppTerminal) -> io::Result<()> {
-    loop {
-        terminal.draw(|frame| {
-            let area = frame.area();
-            let content = vec![
-                Line::from(format!("{}: {}", agent::name(), agent::status())),
-                Line::from("Press q to quit."),
-            ];
+#[derive(Debug, Subcommand)]
+pub(crate) enum EvolutionCmd {
+    Log,
+    Revert { id: String },
+    Consolidate,
+    Pause,
+    Resume,
+}
 
-            frame.render_widget(
-                Paragraph::new(content).block(Block::default().title("omh").borders(Borders::ALL)),
-                area,
-            );
-        })?;
+#[derive(Debug, Subcommand)]
+pub(crate) enum SnapshotCmd {
+    List { session_id: String },
+    Diff { snapshot_id: String },
+    Revert { snapshot_id: String },
+}
 
-        if event::poll(Duration::from_millis(250))?
-            && matches!(event::read()?, Event::Key(key) if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc))
-        {
-            return Ok(());
+#[derive(Debug, Subcommand)]
+pub(crate) enum AuthCmd {
+    /// Add or update a provider credential (interactive if no args given)
+    Login {
+        /// Provider name (openai, anthropic, copilot, or custom name). Interactive selection if omitted.
+        provider: Option<String>,
+        /// API key. Prompted interactively if omitted.
+        #[arg(short, long)]
+        key: Option<String>,
+        /// Base URL (for OpenAI-compatible providers)
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Default model
+        #[arg(long)]
+        model: Option<String>,
+    },
+    /// Remove a provider credential
+    Logout {
+        /// Provider name to remove
+        provider: String,
+    },
+    /// List configured providers
+    List,
+    /// Show authentication status
+    Status,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let args = Args::parse();
+    let log_level = parse_log_level(&args.log);
+
+    match args.mode {
+        None | Some(Mode::Tui { .. }) => {
+            let log_buffer = omh_trace::init_tui(log_level);
+            let resume = match &args.mode {
+                Some(Mode::Tui { resume }) => *resume,
+                _ => false,
+            };
+            run_tui(log_buffer, args.r#continue, resume).await
+        }
+        _ => {
+            omh_trace::init(log_level);
+            match args.mode.unwrap() {
+                Mode::Tui { .. } => unreachable!(),
+                Mode::Cli {
+                    prompt,
+                    agent,
+                } => run_cli(&prompt, &agent, args.r#continue).await,
+                Mode::Sessions { limit } => cmd_sessions(limit).await,
+                Mode::Memory(cmd) => cmd_memory(cmd).await,
+                Mode::Evolution(cmd) => cmd_evolution(cmd).await,
+                Mode::Snapshot(cmd) => cmd_snapshot(cmd).await,
+                Mode::Auth(cmd) => cmd_auth(cmd).await,
+                Mode::UpdateBestModels { global } => cmd_update_best_models(global).await,
+                Mode::Diagnose { session_id } => cmd_diagnose(&session_id).await,
+            }
         }
     }
+}
+
+fn parse_log_level(log: &str) -> Level {
+    match log.to_ascii_lowercase().as_str() {
+        "error" => Level::ERROR,
+        "warn" => Level::WARN,
+        "info" => Level::INFO,
+        "debug" => Level::DEBUG,
+        "trace" => Level::TRACE,
+        _ => Level::INFO,
+    }
+}
+
+pub(crate) fn init_harness() -> Result<Harness> {
+    let workspace_root: PathBuf =
+        std::env::current_dir().context("failed to determine current directory")?;
+    Harness::init(&workspace_root).with_context(|| {
+        format!(
+            "failed to initialize harness at {}",
+            workspace_root.display()
+        )
+    })
 }

@@ -1,32 +1,30 @@
 [package]
-name = "omh"
+name = "runtime"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 
 [dependencies]
-syntect = { workspace = true }
 agent = { workspace = true }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 bus = { workspace = true }
 chrono = { workspace = true }
-clap = { version = "4", features = ["derive"] }
-dialoguer = "0.11"
-crossterm = { workspace = true }
+evolution = { workspace = true }
 futures = { workspace = true }
+hook = { workspace = true }
 mcp = { workspace = true }
 memory = { workspace = true }
 message = { workspace = true }
-omh-trace = { workspace = true }
+permission = { workspace = true }
 provider = { workspace = true }
-ratatui = { workspace = true }
-reqwest = { workspace = true }
-runtime = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+session = { workspace = true }
 skill = { workspace = true }
 snapshot = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 toml = { workspace = true }
+tool = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true }
-unicode-width = "0.2"
