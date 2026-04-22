@@ -17,6 +17,10 @@ pub struct Session {
     pub workspace_root: PathBuf,
     pub created_at: i64,
     pub updated_at: i64,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +45,10 @@ struct SessionHeader {
     pub model: String,
     pub workspace_root: PathBuf,
     pub created_at: i64,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
 }
 
 pub struct SessionManager {
@@ -98,6 +106,8 @@ impl SessionManager {
             workspace_root: workspace_root.into(),
             created_at: now,
             updated_at: now,
+            input_tokens: 0,
+            output_tokens: 0,
         };
         let header = SessionHeader {
             id: session.id.clone(),
@@ -107,6 +117,8 @@ impl SessionManager {
             model: session.model.clone(),
             workspace_root: session.workspace_root.clone(),
             created_at: now,
+            input_tokens: 0,
+            output_tokens: 0,
         };
         fs::create_dir_all(self.session_dir(&session.id))?;
         let path = self.session_path(&session.id);
@@ -133,6 +145,8 @@ impl SessionManager {
             model: session.model.clone(),
             workspace_root: session.workspace_root.clone(),
             created_at: session.created_at,
+            input_tokens: session.input_tokens,
+            output_tokens: session.output_tokens,
         };
         let path = self.session_path(&session.id);
         let mut f = fs::File::create(&path)?;
@@ -162,6 +176,8 @@ impl SessionManager {
             workspace_root: workspace_root.into(),
             created_at: now,
             updated_at: now,
+            input_tokens: 0,
+            output_tokens: 0,
         };
         let header = SessionHeader {
             id: session.id.clone(),
@@ -171,6 +187,8 @@ impl SessionManager {
             model: session.model.clone(),
             workspace_root: session.workspace_root.clone(),
             created_at: now,
+            input_tokens: 0,
+            output_tokens: 0,
         };
         let path = sub_dir.join("session.jsonl");
         let mut f = fs::File::create(&path)?;
@@ -222,6 +240,8 @@ impl SessionManager {
             workspace_root: header.workspace_root,
             created_at: header.created_at,
             updated_at,
+            input_tokens: header.input_tokens,
+            output_tokens: header.output_tokens,
         })
     }
 
@@ -289,6 +309,21 @@ impl SessionManager {
         Ok(())
     }
 
+    pub fn update_tokens(&self, id: &str, input_tokens: u64, output_tokens: u64) -> Result<()> {
+        let path = self.session_path(id);
+        let content = fs::read_to_string(&path)?;
+        let mut lines: Vec<String> = content.lines().map(|line| line.to_owned()).collect();
+        if lines.is_empty() {
+            bail!("empty session file");
+        }
+        let mut header: SessionHeader = serde_json::from_str(&lines[0])?;
+        header.input_tokens = input_tokens;
+        header.output_tokens = output_tokens;
+        lines[0] = serde_json::to_string(&header)?;
+        fs::write(&path, lines.join("\n") + "\n")?;
+        Ok(())
+    }
+
     pub fn restore(&self, session: Session) -> Result<()> {
         let header = SessionHeader {
             id: session.id.clone(),
@@ -298,6 +333,8 @@ impl SessionManager {
             model: session.model,
             workspace_root: session.workspace_root,
             created_at: session.created_at,
+            input_tokens: session.input_tokens,
+            output_tokens: session.output_tokens,
         };
         fs::create_dir_all(self.session_dir(&session.id))?;
         let path = self.session_path(&session.id);
@@ -335,6 +372,8 @@ mod tests {
         let loaded = mgr.get(&session.id).unwrap();
         assert_eq!(loaded.id, session.id);
         assert_eq!(loaded.agent_name, "build");
+        assert_eq!(loaded.input_tokens, 0);
+        assert_eq!(loaded.output_tokens, 0);
     }
 
     #[test]
@@ -360,6 +399,19 @@ mod tests {
 
         let list = mgr.list(10).unwrap();
         assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn update_and_restore_tokens() {
+        let dir = tempdir();
+        let mgr = SessionManager::new(&dir).unwrap();
+        let session = mgr.create("build", "gpt-4o", Path::new("/tmp")).unwrap();
+
+        mgr.update_tokens(&session.id, 123, 456).unwrap();
+
+        let loaded = mgr.get(&session.id).unwrap();
+        assert_eq!(loaded.input_tokens, 123);
+        assert_eq!(loaded.output_tokens, 456);
     }
 
     #[test]

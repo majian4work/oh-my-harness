@@ -145,7 +145,11 @@ pub trait Provider: Send + Sync {
         }
 
         let results = futures::future::join_all(handles).await;
-        Ok(results.into_iter().filter(|(_, valid)| *valid).map(|(m, _)| m).collect())
+        Ok(results
+            .into_iter()
+            .filter(|(_, valid)| *valid)
+            .map(|(m, _)| m)
+            .collect())
     }
 }
 
@@ -176,7 +180,11 @@ impl ProviderRegistry {
         self.providers.keys().next().map(|k| k.as_str())
     }
 
-    pub fn resolve_model(&self, requested: Option<&ModelSpec>, cost_hint: Option<ModelCostTier>) -> Option<ResolvedModel> {
+    pub fn resolve_model(
+        &self,
+        requested: Option<&ModelSpec>,
+        cost_hint: Option<ModelCostTier>,
+    ) -> Option<ResolvedModel> {
         tracing::trace!(
             requested = ?requested.map(|s| &s.model_id),
             provider_hint = ?requested.and_then(|s| s.provider_id.as_deref()),
@@ -197,21 +205,6 @@ impl ProviderRegistry {
                         model_id: spec.model_id.clone(),
                     });
                 }
-            }
-
-            let normalized = normalize_model_id(&spec.model_id);
-            if normalized != spec.model_id {
-                let (pid, _) = self.providers.iter().next()?;
-                tracing::info!(
-                    requested = %spec.model_id,
-                    resolved = %normalized,
-                    provider = %pid,
-                    "model alias normalized"
-                );
-                return Some(ResolvedModel {
-                    provider_id: pid.clone(),
-                    model_id: normalized,
-                });
             }
 
             let (pid, _) = self.providers.iter().next()?;
@@ -276,7 +269,8 @@ pub fn infer_model_cost(model_id: &str) -> ModelCostTier {
     let id = model_id.to_lowercase();
     if id.contains("mini") || id.contains("flash") || id.contains("haiku") || id.contains("nano") {
         ModelCostTier::Low
-    } else if id.contains("o3") || id.contains("o1") || id.contains("opus") || id.contains("ultra") {
+    } else if id.contains("o3") || id.contains("o1") || id.contains("opus") || id.contains("ultra")
+    {
         ModelCostTier::High
     } else {
         ModelCostTier::Medium
@@ -287,7 +281,11 @@ pub fn infer_context_window(model_id: &str) -> usize {
     let id = model_id.to_lowercase();
     if id.contains("claude") {
         200_000
-    } else if id.contains("gpt-4.1") || id.contains("gpt-5") || id.contains("o3") || id.contains("o4") {
+    } else if id.contains("gpt-4.1")
+        || id.contains("gpt-5")
+        || id.contains("o3")
+        || id.contains("o4")
+    {
         1_000_000
     } else if id.contains("gpt-4o") {
         128_000
@@ -296,34 +294,4 @@ pub fn infer_context_window(model_id: &str) -> usize {
     } else {
         128_000
     }
-}
-
-fn normalize_model_id(requested: &str) -> String {
-    let r = requested.to_lowercase();
-
-    let mappings: &[(&[&str], &str)] = &[
-        (&["gpt5-mini", "gpt-5-mini"], "gpt-5.4-mini"),
-        (&["gpt5", "gpt-5"], "gpt-5.4"),
-        (&["o3-mini"], "o3-mini"),
-        (&["o3"], "o3"),
-        (&["claude-4-opus", "claude-opus-4"], "claude-opus-4-0"),
-        (&["claude-4-sonnet", "claude-sonnet-4"], "claude-sonnet-4-0"),
-        (&["claude-4-haiku", "claude-haiku-4"], "claude-haiku-4-0"),
-    ];
-
-    for (patterns, target) in mappings {
-        for pattern in *patterns {
-            if r == *pattern {
-                tracing::trace!(
-                    requested = %requested,
-                    normalized = %target,
-                    "normalize_model_id: alias matched"
-                );
-                return target.to_string();
-            }
-        }
-    }
-
-    tracing::trace!(requested = %requested, "normalize_model_id: no alias, pass-through");
-    requested.to_string()
 }

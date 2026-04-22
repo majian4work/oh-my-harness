@@ -268,21 +268,25 @@ impl Provider for CopilotProvider {
         match tier {
             crate::ModelCostTier::Low => "gpt-4o-mini".to_string(),
             crate::ModelCostTier::Medium => "gpt-4.1".to_string(),
-            crate::ModelCostTier::High => "gpt-5.4".to_string(),
+            crate::ModelCostTier::High => "claude-opus-4.6".to_string(),
         }
     }
 
     async fn stream(&self, request: CompletionRequest) -> Result<StreamResult> {
         let token = self.get_copilot_token().await?;
+        let payload = self.build_payload(&request, true);
         let response = self
             .chat_request_builder(&token)
-            .json(&self.build_payload(&request, true))
+            .json(&payload)
             .send()
             .await?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            if let Ok(req_json) = serde_json::to_string(&payload) {
+                tracing::error!(status = %status, body = %body, request = %req_json, "copilot streaming request failed");
+            }
             bail!("copilot streaming request failed with status {status}: {body}");
         }
 
@@ -318,15 +322,19 @@ impl Provider for CopilotProvider {
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
         let token = self.get_copilot_token().await?;
+        let payload = self.build_payload(&request, false);
         let response = self
             .chat_request_builder(&token)
-            .json(&self.build_payload(&request, false))
+            .json(&payload)
             .send()
             .await?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            if let Ok(req_json) = serde_json::to_string(&payload) {
+                tracing::error!(status = %status, body = %body, request = %req_json, "copilot completion request failed");
+            }
             bail!("copilot completion request failed with status {status}: {body}");
         }
 

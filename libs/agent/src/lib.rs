@@ -414,50 +414,50 @@ pub fn default_categories() -> Vec<Category> {
         Category {
             name: "quick".to_string(),
             description: "Fast, low-cost execution for straightforward tasks.".to_string(),
-            model: model("gpt-5.4-mini"),
+            model: model("claude-haiku-4.5"),
             temperature: Some(0.2),
         },
         Category {
             name: "deep".to_string(),
             description: "Higher-depth reasoning for complex implementation work.".to_string(),
-            model: model("gpt-5.4"),
+            model: model("claude-opus-4.6"),
             temperature: Some(0.2),
         },
         Category {
             name: "visual-engineering".to_string(),
             description: "UI, interaction, and visual product engineering tasks.".to_string(),
-            model: model("gpt-4.1"),
+            model: model("claude-sonnet-4.6"),
             temperature: Some(0.3),
         },
         Category {
             name: "ultrabrain".to_string(),
             description: "Maximum-effort analysis for the hardest problems.".to_string(),
-            model: model("o3"),
+            model: model("claude-opus-4.6"),
             temperature: Some(0.1),
         },
         Category {
             name: "artistry".to_string(),
             description: "Creative ideation and style-sensitive generation.".to_string(),
-            model: model("gpt-4.1"),
+            model: model("claude-sonnet-4.5"),
             temperature: Some(0.8),
         },
         Category {
             name: "writing".to_string(),
             description: "Editorial writing, summaries, and communication tasks.".to_string(),
-            model: model("gpt-5.4"),
+            model: model("claude-sonnet-4.6"),
             temperature: Some(0.6),
         },
         Category {
             name: "unspecified-low".to_string(),
             description: "Fallback low-cost category when no better match exists.".to_string(),
-            model: model("gpt-5.4-mini"),
+            model: model("claude-haiku-4.5"),
             temperature: Some(0.3),
         },
         Category {
             name: "unspecified-high".to_string(),
             description: "Fallback high-capability category when no better match exists."
                 .to_string(),
-            model: model("gpt-5.4"),
+            model: model("claude-sonnet-4.6"),
             temperature: Some(0.3),
         },
     ]

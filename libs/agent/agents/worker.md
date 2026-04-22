@@ -5,7 +5,7 @@ Category-spawned task executor
 ## Config
 - mode: subagent
 - cost: cheap
-- model: gpt-5.4-mini
+- model: claude-sonnet-4.5
 - max_turns: 60
 - temperature: 0.2
 - permission_level: WorkspaceWrite

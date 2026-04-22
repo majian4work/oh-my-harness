@@ -5,7 +5,7 @@ Read-only advisor for architecture and debugging
 ## Config
 - mode: subagent
 - cost: expensive
-- model: gpt-5.4
+- model: claude-sonnet-4.6
 - max_turns: 50
 - temperature: 0.1
 

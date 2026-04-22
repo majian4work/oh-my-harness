@@ -43,6 +43,9 @@ pub enum AgentEvent {
     ToolExecuted {
         session_id: String,
         tool: String,
+        args: String,
+        result: String,
+        is_error: bool,
         duration_ms: u64,
     },
     SubagentSpawned {

@@ -49,7 +49,7 @@ pub enum ProviderType {
 impl Credentials {
     pub fn global_path() -> PathBuf {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(".config/omh/credentials.json")
+        PathBuf::from(home).join(".cache/omh/credentials.json")
     }
 
     pub fn project_path(workspace_root: &std::path::Path) -> PathBuf {
@@ -62,7 +62,8 @@ impl Credentials {
         }
         let content = fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        serde_json::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))
+        serde_json::from_str(&content)
+            .with_context(|| format!("failed to parse {}", path.display()))
     }
 
     pub fn load() -> Result<Self> {
@@ -172,7 +173,7 @@ const MODELS_CACHE_TTL_SECS: u64 = 86400;
 impl ModelsCache {
     pub fn path() -> PathBuf {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(".config/omh/models_cache.json")
+        PathBuf::from(home).join(".cache/omh/models_cache.json")
     }
 
     pub fn load() -> Self {

@@ -5,7 +5,7 @@ Fast codebase grep, read-only
 ## Config
 - mode: subagent
 - cost: free
-- model: gpt-5.4-mini
+- model: claude-haiku-4.5
 - max_turns: 30
 - temperature: 0.0
 

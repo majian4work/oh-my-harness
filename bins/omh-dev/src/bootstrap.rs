@@ -39,7 +39,7 @@ pub enum ProviderType {
 impl Credentials {
     pub fn global_path() -> PathBuf {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(".config/omh/credentials.json")
+        PathBuf::from(home).join(".cache/omh/credentials.json")
     }
 
     pub fn project_path(workspace_root: &std::path::Path) -> PathBuf {

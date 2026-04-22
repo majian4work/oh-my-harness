@@ -1,9 +1,6 @@
-use std::collections::VecDeque;
-use std::fmt;
-use std::sync::{Arc, Mutex};
-
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -15,11 +12,24 @@ pub const SUBAGENT_SPAWN: &str = "subagent_spawn";
 pub const MEMORY_OP: &str = "memory_op";
 pub const SNAPSHOT_OP: &str = "snapshot_op";
 
-const TUI_LOG_CAPACITY: usize = 500;
-
 const OMH_CRATES: &[&str] = &[
-    "omh", "runtime", "provider", "tool", "agent", "session", "mcp", "bus", "memory", "evolution",
-    "snapshot", "hook", "permission", "skill", "acp", "message", "omh_trace",
+    "omh",
+    "runtime",
+    "provider",
+    "tool",
+    "agent",
+    "session",
+    "mcp",
+    "bus",
+    "memory",
+    "evolution",
+    "snapshot",
+    "hook",
+    "permission",
+    "skill",
+    "acp",
+    "message",
+    "omh_trace",
 ];
 
 /// Build a filter that sets external crates to `warn` and our crates to the
@@ -33,9 +43,40 @@ fn build_scoped_filter(level: Level) -> EnvFilter {
     EnvFilter::new(directives)
 }
 
+/// Build a filter that only passes events at exactly `level` for our crates.
+fn build_exact_level_filter(level: Level) -> tracing_subscriber::filter::Targets {
+    let mut targets = tracing_subscriber::filter::Targets::new();
+    for crate_name in OMH_CRATES {
+        targets = targets.with_target(*crate_name, level);
+    }
+    targets
+}
+
+fn log_dir() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join(".cache/omh/logs")
+}
+
+fn make_file_layer(level: Level) -> Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync> {
+    let appender = tracing_appender::rolling::daily(
+        log_dir(),
+        format!("{}.log", level.as_str().to_lowercase()),
+    );
+    Box::new(
+        tracing_subscriber::fmt::layer()
+            .with_writer(appender)
+            .with_ansi(false)
+            .with_target(true)
+            .with_file(false)
+            .with_line_number(false)
+            .with_filter(build_exact_level_filter(level)),
+    )
+}
+
 pub fn init(level: Level) {
-    let filter =
-        EnvFilter::try_from_env("OMH_LOG").unwrap_or_else(|_| build_scoped_filter(level));
+    let filter = EnvFilter::try_from_env("OMH_LOG").unwrap_or_else(|_| build_scoped_filter(level));
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -46,103 +87,23 @@ pub fn init(level: Level) {
         .init();
 }
 
-#[derive(Clone)]
-pub struct TuiLogBuffer {
-    inner: Arc<Mutex<VecDeque<String>>>,
-}
+/// Initialise file-based logging for the TUI (no stdout output).
+/// Each level writes to its own file under `~/.cache/omh/logs/`.
+/// Only levels enabled by `--log` (or `OMH_LOG`) are written.
+pub fn init_file(level: Level) {
+    let layers: Vec<Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync>> = [
+        Level::ERROR,
+        Level::WARN,
+        Level::INFO,
+        Level::DEBUG,
+        Level::TRACE,
+    ]
+    .into_iter()
+    .filter(|l| *l <= level)
+    .map(make_file_layer)
+    .collect();
 
-impl TuiLogBuffer {
-    fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(VecDeque::with_capacity(TUI_LOG_CAPACITY))),
-        }
-    }
-
-    fn push(&self, line: String) {
-        let mut buf = self.inner.lock().unwrap();
-        if buf.len() >= TUI_LOG_CAPACITY {
-            buf.pop_front();
-        }
-        buf.push_back(line);
-    }
-
-    pub fn drain(&self) -> Vec<String> {
-        let buf = self.inner.lock().unwrap();
-        buf.iter().cloned().collect()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.inner.lock().unwrap().is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.inner.lock().unwrap().len()
-    }
-}
-
-struct TuiLogLayer {
-    buffer: TuiLogBuffer,
-}
-
-impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for TuiLogLayer {
-    fn on_event(
-        &self,
-        event: &tracing::Event<'_>,
-        _ctx: tracing_subscriber::layer::Context<'_, S>,
-    ) {
-        let meta = event.metadata();
-        let mut visitor = MessageVisitor::default();
-        event.record(&mut visitor);
-
-        let line = format!("{} {} {}", meta.level(), meta.target(), visitor.message,);
-        self.buffer.push(line);
-    }
-}
-
-#[derive(Default)]
-struct MessageVisitor {
-    message: String,
-}
-
-impl tracing::field::Visit for MessageVisitor {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
-        if field.name() == "message" {
-            self.message = format!("{:?}", value);
-        } else if !self.message.is_empty() {
-            self.message
-                .push_str(&format!(" {}={:?}", field.name(), value));
-        } else {
-            self.message = format!("{}={:?}", field.name(), value);
-        }
-    }
-
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        if field.name() == "message" {
-            self.message = value.to_string();
-        } else if !self.message.is_empty() {
-            self.message
-                .push_str(&format!(" {}={}", field.name(), value));
-        } else {
-            self.message = format!("{}={}", field.name(), value);
-        }
-    }
-}
-
-pub fn init_tui(level: Level) -> TuiLogBuffer {
-    let filter =
-        EnvFilter::try_from_env("OMH_LOG").unwrap_or_else(|_| build_scoped_filter(level));
-
-    let buffer = TuiLogBuffer::new();
-    let layer = TuiLogLayer {
-        buffer: buffer.clone(),
-    };
-
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(layer)
-        .init();
-
-    buffer
+    tracing_subscriber::registry().with(layers).init();
 }
 
 #[cfg(test)]
@@ -162,25 +123,5 @@ mod tests {
     fn init_test_logs_message() {
         init_test();
         info!("trace test message");
-    }
-
-    #[test]
-    fn tui_log_buffer_captures() {
-        let buf = TuiLogBuffer::new();
-        buf.push("test line".to_string());
-        assert_eq!(buf.len(), 1);
-        let lines = buf.drain();
-        assert_eq!(lines[0], "test line");
-    }
-
-    #[test]
-    fn tui_log_buffer_ring() {
-        let buf = TuiLogBuffer::new();
-        for i in 0..600 {
-            buf.push(format!("line {i}"));
-        }
-        assert_eq!(buf.len(), TUI_LOG_CAPACITY);
-        let lines = buf.drain();
-        assert_eq!(lines[0], "line 100");
     }
 }

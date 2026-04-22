@@ -228,3 +228,7 @@ shellcheck*/
 .devcontainer.runtime.env
 /justfile
 /test_summary.md
+
+# Local state
+.omh/
+.opencode/

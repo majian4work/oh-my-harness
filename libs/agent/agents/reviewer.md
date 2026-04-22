@@ -5,7 +5,7 @@ Post-implementation review
 ## Config
 - mode: subagent
 - cost: expensive
-- model: gpt-5.2
+- model: claude-sonnet-4.6
 - max_turns: 50
 - temperature: 0.1
 

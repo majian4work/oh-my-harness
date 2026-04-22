@@ -5,7 +5,7 @@ Structured planning, read-only
 ## Config
 - mode: primary
 - cost: expensive
-- model: gpt-5.4
+- model: claude-opus-4.6
 - max_turns: 80
 - temperature: 0.1
 

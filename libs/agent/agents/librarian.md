@@ -5,7 +5,7 @@ External docs and web search
 ## Config
 - mode: subagent
 - cost: cheap
-- model: gpt-5.4-mini
+- model: claude-sonnet-4
 - max_turns: 40
 - temperature: 0.2
 

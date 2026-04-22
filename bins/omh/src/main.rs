@@ -146,12 +146,12 @@ async fn main() -> Result<()> {
 
     match args.mode {
         None | Some(Mode::Tui { .. }) => {
-            let log_buffer = omh_trace::init_tui(log_level);
+            omh_trace::init_file(log_level);
             let resume = match &args.mode {
                 Some(Mode::Tui { resume }) => *resume,
                 _ => false,
             };
-            run_tui(log_buffer, args.r#continue, resume).await
+            run_tui(args.r#continue, resume).await
         }
         _ => {
             omh_trace::init(log_level);

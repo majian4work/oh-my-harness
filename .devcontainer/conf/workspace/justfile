@@ -16,7 +16,7 @@ docker-attach:
 
 # Build and run the TUI
 omh *args:
-    cargo run -r -p omh -- -c "$@"
+    cargo run -r -p omh -- --log trace -c "$@"
 
 test PROMPT="Parse this project and summarize its main components and functionality into test_summary.md":
     cargo run -r -p omh -- --log trace cli "{{PROMPT}}"

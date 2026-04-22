@@ -374,6 +374,7 @@ impl AgentRuntime {
             self.current_turn += 1;
 
             self.maybe_compact_messages(provider, &model_id, &system, &mut messages).await;
+            sanitize_messages(&mut messages);
 
             let request = CompletionRequest {
                 model: model_id.clone(),
@@ -414,7 +415,7 @@ impl AgentRuntime {
                             Some(s) => s,
                             None => return Err(last_err),
                         }
-                    } else if err_msg.contains("not accessible") || err_msg.contains("not found") {
+                    } else if err_msg.contains("not accessible") || err_msg.contains("not found") || err_msg.contains("not supported") {
                         let fallback_model = provider.model_for_tier(cost_hint.unwrap_or(ModelCostTier::Medium));
                         tracing::warn!(
                             agent = %self.agent_name,
@@ -502,6 +503,14 @@ impl AgentRuntime {
             };
             messages.push(assistant_msg.clone());
             dump_turn(&dump_dir, &self.agent_name, self.current_turn, "response", &assistant_msg);
+            tracing::info!(
+                agent = %self.agent_name,
+                turn = self.current_turn,
+                parts = assistant_msg.parts.len(),
+                text_len = text_buffer.len(),
+                tools = tool_calls.len(),
+                "persisting assistant message"
+            );
             harness
                 .session_manager
                 .append_message(&self.session_id, &assistant_msg)?;
@@ -555,11 +564,6 @@ impl AgentRuntime {
                     "tool_call completed"
                 );
                 self.log("tool_call", &format!("{} ({}ms) args={}", tool_call.name, duration_ms, tool_call.args));
-                harness.bus.publish(AgentEvent::ToolExecuted {
-                    session_id: self.session_id.clone(),
-                    tool: tool_call.name.clone(),
-                    duration_ms,
-                });
 
                 let (content, is_error, error_category, error_text) = match output {
                     Ok(output) => {
@@ -586,6 +590,15 @@ impl AgentRuntime {
                     }
                 };
 
+                harness.bus.publish(AgentEvent::ToolExecuted {
+                    session_id: self.session_id.clone(),
+                    tool: tool_call.name.clone(),
+                    args: tool_call.args.clone(),
+                    result: content.clone(),
+                    is_error,
+                    duration_ms,
+                });
+
                 let tool_telemetry = ToolTelemetry {
                     session_id: self.session_id.clone(),
                     agent_name: self.agent_name.clone(),
@@ -606,7 +619,7 @@ impl AgentRuntime {
                     tracing::warn!(session_id = %self.session_id, tool = %tool_call.name, error = %error, "failed to persist tool telemetry");
                 }
 
-                if !is_error && matches!(tool_call.name.as_str(), "write" | "edit") {
+                if !is_error && matches!(tool_call.name.as_str(), "write_file" | "edit_file") {
                     if let Some(path) = serde_json::from_str::<serde_json::Value>(&tool_call.args)
                         .ok()
                         .and_then(|v| v.get("filePath").or(v.get("path")).and_then(|p| p.as_str().map(String::from)))
@@ -951,6 +964,46 @@ async fn run_background_agent(
     match Box::pin(runtime.run_turn(&harness, &prompt)).await {
         Ok(result) => Ok(result.response),
         Err(e) => Err(anyhow::anyhow!("Agent '{agent_name}' failed: {e}")),
+    }
+}
+
+/// Remove orphaned tool_result messages whose IDs don't match any tool_use
+/// in a preceding assistant message. This prevents 400 errors from the API.
+fn sanitize_messages(messages: &mut Vec<Message>) {
+    let mut known_tool_ids: HashSet<String> = HashSet::new();
+    let mut to_remove = Vec::new();
+    for (idx, msg) in messages.iter().enumerate() {
+        match msg.role {
+            Role::Assistant => {
+                for part in &msg.parts {
+                    if let ContentPart::ToolUse { id, .. } = part {
+                        known_tool_ids.insert(id.clone());
+                    }
+                }
+            }
+            Role::User => {
+                let all_tool_results = msg.parts.iter().all(|p| matches!(p, ContentPart::ToolResult { .. }));
+                if all_tool_results && !msg.parts.is_empty() {
+                    let any_known = msg.parts.iter().any(|p| {
+                        if let ContentPart::ToolResult { id, .. } = p {
+                            known_tool_ids.contains(id)
+                        } else {
+                            false
+                        }
+                    });
+                    if !any_known {
+                        to_remove.push(idx);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if !to_remove.is_empty() {
+        tracing::warn!(count = to_remove.len(), "removing orphaned tool_result messages");
+        for idx in to_remove.into_iter().rev() {
+            messages.remove(idx);
+        }
     }
 }
 
