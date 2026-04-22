@@ -13,9 +13,75 @@ use tracing::Level;
 
 use crate::{
     cli::run_cli,
-    commands::{cmd_auth, cmd_diagnose, cmd_evolution, cmd_memory, cmd_sessions, cmd_snapshot, cmd_update_best_models},
+    commands::{
+        cmd_auth, cmd_evolution, cmd_memory, cmd_sessions, cmd_snapshot, cmd_update_best_models,
+    },
     tui::run_tui,
 };
+
+#[derive(Debug, Subcommand)]
+pub enum MemoryCmd {
+    List,
+    Search { query: String },
+    Add { content: String },
+    Forget { id: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum EvolutionCmd {
+    Log,
+    Revert { id: String },
+    Consolidate,
+    Pause,
+    Resume,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SnapshotCmd {
+    List { session_id: String },
+    Diff { snapshot_id: String },
+    Revert { snapshot_id: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AuthCmd {
+    Login {
+        provider: Option<String>,
+        #[arg(short, long)]
+        key: Option<String>,
+        #[arg(long)]
+        base_url: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+    },
+    Logout {
+        provider: String,
+    },
+    List,
+    Status,
+}
+
+pub fn parse_log_level(log: &str) -> Level {
+    match log.to_ascii_lowercase().as_str() {
+        "error" => Level::ERROR,
+        "warn" => Level::WARN,
+        "info" => Level::INFO,
+        "debug" => Level::DEBUG,
+        "trace" => Level::TRACE,
+        _ => Level::INFO,
+    }
+}
+
+pub fn init_harness() -> Result<Harness> {
+    let workspace_root: PathBuf =
+        std::env::current_dir().context("failed to determine current directory")?;
+    Harness::init(&workspace_root).with_context(|| {
+        format!(
+            "failed to initialize harness at {}",
+            workspace_root.display()
+        )
+    })
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "omh", about = "The orchestration framework for AI agents")]
@@ -71,62 +137,6 @@ enum Mode {
         #[arg(short, long)]
         global: bool,
     },
-    /// Analyze session dumps for model behavior anomalies
-    Diagnose {
-        /// Session ID to analyze
-        session_id: String,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum MemoryCmd {
-    List,
-    Search { query: String },
-    Add { content: String },
-    Forget { id: String },
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum EvolutionCmd {
-    Log,
-    Revert { id: String },
-    Consolidate,
-    Pause,
-    Resume,
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum SnapshotCmd {
-    List { session_id: String },
-    Diff { snapshot_id: String },
-    Revert { snapshot_id: String },
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum AuthCmd {
-    /// Add or update a provider credential (interactive if no args given)
-    Login {
-        /// Provider name (openai, anthropic, copilot, or custom name). Interactive selection if omitted.
-        provider: Option<String>,
-        /// API key. Prompted interactively if omitted.
-        #[arg(short, long)]
-        key: Option<String>,
-        /// Base URL (for OpenAI-compatible providers)
-        #[arg(long)]
-        base_url: Option<String>,
-        /// Default model
-        #[arg(long)]
-        model: Option<String>,
-    },
-    /// Remove a provider credential
-    Logout {
-        /// Provider name to remove
-        provider: String,
-    },
-    /// List configured providers
-    List,
-    /// Show authentication status
-    Status,
 }
 
 #[tokio::main]
@@ -147,40 +157,14 @@ async fn main() -> Result<()> {
             omh_trace::init(log_level);
             match args.mode.unwrap() {
                 Mode::Tui { .. } => unreachable!(),
-                Mode::Cli {
-                    prompt,
-                    agent,
-                } => run_cli(&prompt, &agent, args.r#continue).await,
+                Mode::Cli { prompt, agent } => run_cli(&prompt, &agent, args.r#continue).await,
                 Mode::Sessions { limit } => cmd_sessions(limit).await,
                 Mode::Memory(cmd) => cmd_memory(cmd).await,
                 Mode::Evolution(cmd) => cmd_evolution(cmd).await,
                 Mode::Snapshot(cmd) => cmd_snapshot(cmd).await,
                 Mode::Auth(cmd) => cmd_auth(cmd).await,
                 Mode::UpdateBestModels { global } => cmd_update_best_models(global).await,
-                Mode::Diagnose { session_id } => cmd_diagnose(&session_id).await,
             }
         }
     }
-}
-
-fn parse_log_level(log: &str) -> Level {
-    match log.to_ascii_lowercase().as_str() {
-        "error" => Level::ERROR,
-        "warn" => Level::WARN,
-        "info" => Level::INFO,
-        "debug" => Level::DEBUG,
-        "trace" => Level::TRACE,
-        _ => Level::INFO,
-    }
-}
-
-pub(crate) fn init_harness() -> Result<Harness> {
-    let workspace_root: PathBuf =
-        std::env::current_dir().context("failed to determine current directory")?;
-    Harness::init(&workspace_root).with_context(|| {
-        format!(
-            "failed to initialize harness at {}",
-            workspace_root.display()
-        )
-    })
 }

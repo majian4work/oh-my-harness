@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "bins/omh",
+    "bins/omh-dev",
     "libs/acp",
     "libs/agent",
     "libs/bus",

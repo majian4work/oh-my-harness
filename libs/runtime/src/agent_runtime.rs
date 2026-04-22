@@ -6,12 +6,15 @@ use bus::AgentEvent;
 use futures::StreamExt;
 use memory::Scope;
 use message::{ContentPart, Message, Role};
-use provider::{CompletionRequest, ModelCostTier, ModelSpec, StreamEvent, SystemMessage, ToolDefinition};
+use provider::{
+    CompletionRequest, ModelCostTier, ModelSpec, StreamEvent, SystemMessage, ToolDefinition,
+};
 use tokio_util::sync::CancellationToken;
 use tool::ToolContext;
 
 use crate::harness::Harness;
 use crate::session_logger::SessionLogger;
+use crate::telemetry::{ErrorCategory, ToolTelemetry, TurnTelemetry, classify_error};
 
 const COMPACTION_THRESHOLD: f64 = 0.80;
 const COMPACTION_KEEP_RECENT: usize = 4;
@@ -88,7 +91,10 @@ impl AgentRuntime {
         messages: &mut Vec<Message>,
     ) {
         let context_window = provider.context_window(model_id);
-        let system_tokens: usize = system.iter().map(|s| message::estimate_tokens(&s.content)).sum();
+        let system_tokens: usize = system
+            .iter()
+            .map(|s| message::estimate_tokens(&s.content))
+            .sum();
         let msg_tokens = message::estimate_messages_tokens(messages);
         let total = system_tokens + msg_tokens;
         let threshold = (context_window as f64 * COMPACTION_THRESHOLD) as usize;
@@ -212,6 +218,9 @@ impl AgentRuntime {
     }
 
     pub async fn run_turn(&mut self, harness: &Harness, input: &str) -> Result<TurnResult> {
+        let run_started_at = now_millis();
+        let run_started = std::time::Instant::now();
+        let start_turn = self.current_turn;
         let agent = harness
             .agent_registry
             .get(&self.agent_name)
@@ -220,12 +229,15 @@ impl AgentRuntime {
         let cost_hint = Some(agent_cost_to_tier(agent.cost));
 
         let override_spec = self.model_override.clone();
-        let config_spec = harness.agent_overrides.get(&self.agent_name).and_then(|ov| {
-            ov.model.as_ref().map(|m| ModelSpec {
-                model_id: m.clone(),
-                provider_id: ov.provider.clone(),
-            })
-        });
+        let config_spec = harness
+            .agent_overrides
+            .get(&self.agent_name)
+            .and_then(|ov| {
+                ov.model.as_ref().map(|m| ModelSpec {
+                    model_id: m.clone(),
+                    provider_id: ov.provider.clone(),
+                })
+            });
         let agent_spec = agent.model.as_ref().map(|m| ModelSpec {
             model_id: m.model_id.clone(),
             provider_id: m.provider_id.clone(),
@@ -245,11 +257,13 @@ impl AgentRuntime {
         let resolved = harness
             .provider_registry
             .resolve_model(requested_spec.as_ref(), cost_hint)
-            .with_context(|| format!(
-                "no provider can serve agent '{}' (requested model: {:?})",
-                agent.name,
-                requested_spec.as_ref().map(|s| &s.model_id),
-            ))?;
+            .with_context(|| {
+                format!(
+                    "no provider can serve agent '{}' (requested model: {:?})",
+                    agent.name,
+                    requested_spec.as_ref().map(|s| &s.model_id),
+                )
+            })?;
 
         let provider_id = &resolved.provider_id;
         let provider = harness
@@ -267,13 +281,9 @@ impl AgentRuntime {
             Scope::Global,
         ];
         let recalled_memories = {
-            let candidates = memory::recall_candidates(
-                harness.memory.as_ref(),
-                &memory_scopes,
-                input,
-                20,
-            )
-            .await?;
+            let candidates =
+                memory::recall_candidates(harness.memory.as_ref(), &memory_scopes, input, 20)
+                    .await?;
 
             if candidates.len() > 5 {
                 let ranked = self
@@ -331,7 +341,13 @@ impl AgentRuntime {
         harness.bus.publish(AgentEvent::TurnStarted {
             session_id: self.session_id.clone(),
         });
-        self.log("turn_start", &format!("turn={} agent={} model={} provider={}", self.current_turn, self.agent_name, model_id, provider_id));
+        self.log(
+            "turn_start",
+            &format!(
+                "turn={} agent={} model={} provider={}",
+                self.current_turn, self.agent_name, model_id, provider_id
+            ),
+        );
 
         let user_msg = Message::user(format!("msg-{}", ulid::Ulid::new()), input);
         harness
@@ -349,6 +365,7 @@ impl AgentRuntime {
         let mut response_text = String::new();
         let mut completed = true;
 
+        let run_result: Result<TurnResult> = async {
         loop {
             if self.current_turn >= self.max_turns {
                 completed = false;
@@ -499,6 +516,7 @@ impl AgentRuntime {
             for tool_call in &tool_calls {
                 let input =
                     serde_json::from_str(&tool_call.args).unwrap_or(serde_json::Value::Null);
+                let tool_started_at = now_millis();
                 let started_at = std::time::Instant::now();
                 let ctx = ToolContext {
                     session_id: self.session_id.clone(),
@@ -543,10 +561,50 @@ impl AgentRuntime {
                     duration_ms,
                 });
 
-                let (content, is_error) = match output {
-                    Ok(output) => (output.content, output.is_error),
-                    Err(error) => (error.to_string(), true),
+                let (content, is_error, error_category, error_text) = match output {
+                    Ok(output) => {
+                        let category = if output.is_error {
+                            Some(classify_error(&output.content))
+                        } else {
+                            None
+                        };
+                        let error_text = if output.is_error {
+                            Some(output.content.clone())
+                        } else {
+                            None
+                        };
+                        (output.content, output.is_error, category, error_text)
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        (
+                            message.clone(),
+                            true,
+                            Some(classify_error(&message)),
+                            Some(message),
+                        )
+                    }
                 };
+
+                let tool_telemetry = ToolTelemetry {
+                    session_id: self.session_id.clone(),
+                    agent_name: self.agent_name.clone(),
+                    turn: self.current_turn,
+                    tool_call_id: tool_call.id.clone(),
+                    tool_name: tool_call.name.clone(),
+                    started_at: tool_started_at,
+                    completed_at: now_millis(),
+                    duration_ms,
+                    input_bytes: tool_call.args.len(),
+                    output_chars: content.chars().count(),
+                    success: !is_error,
+                    error_category,
+                    error: error_text,
+                };
+                let tool_telemetry_path = harness.session_manager.tool_telemetry_path(&self.session_id);
+                if let Err(error) = tool_telemetry.append_jsonl(&tool_telemetry_path) {
+                    tracing::warn!(session_id = %self.session_id, tool = %tool_call.name, error = %error, "failed to persist tool telemetry");
+                }
 
                 if !is_error && matches!(tool_call.name.as_str(), "write" | "edit") {
                     if let Some(path) = serde_json::from_str::<serde_json::Value>(&tool_call.args)
@@ -607,6 +665,57 @@ impl AgentRuntime {
             output_tokens: total_output_tokens,
             completed,
         })
+        }
+        .await;
+
+        let run_completed_at = now_millis();
+        let telemetry = match &run_result {
+            Ok(result) => TurnTelemetry {
+                session_id: self.session_id.clone(),
+                agent_name: self.agent_name.clone(),
+                provider_id: provider_id.to_string(),
+                model_id: model_id.clone(),
+                started_at: run_started_at,
+                completed_at: run_completed_at,
+                elapsed_ms: run_started.elapsed().as_millis() as u64,
+                loop_turns: self.current_turn.saturating_sub(start_turn),
+                tool_calls: result.tool_calls_made,
+                input_tokens: result.input_tokens,
+                output_tokens: result.output_tokens,
+                completed: result.completed,
+                response_chars: result.response.chars().count(),
+                error_category: if result.completed {
+                    None
+                } else {
+                    Some(ErrorCategory::MaxTurnsReached)
+                },
+                error: None,
+            },
+            Err(error) => TurnTelemetry {
+                session_id: self.session_id.clone(),
+                agent_name: self.agent_name.clone(),
+                provider_id: provider_id.to_string(),
+                model_id: model_id.clone(),
+                started_at: run_started_at,
+                completed_at: run_completed_at,
+                elapsed_ms: run_started.elapsed().as_millis() as u64,
+                loop_turns: self.current_turn.saturating_sub(start_turn),
+                tool_calls: total_tool_calls,
+                input_tokens: total_input_tokens,
+                output_tokens: total_output_tokens,
+                completed: false,
+                response_chars: 0,
+                error_category: Some(classify_error(&error.to_string())),
+                error: Some(error.to_string()),
+            },
+        };
+
+        let telemetry_path = harness.session_manager.telemetry_path(&self.session_id);
+        if let Err(error) = telemetry.append_jsonl(&telemetry_path) {
+            tracing::warn!(session_id = %self.session_id, error = %error, "failed to persist telemetry");
+        }
+
+        run_result
     }
 }
 
@@ -617,7 +726,9 @@ fn execute_spawn_agent<'a>(
     harness: &'a Harness,
     input: &'a serde_json::Value,
     workspace_root: &'a std::path::Path,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<tool::ToolOutput>> + Send + 'a>> {
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = anyhow::Result<tool::ToolOutput>> + Send + 'a>,
+> {
     Box::pin(async move {
         let agent_name = input
             .get("agent_name")
@@ -666,15 +777,27 @@ fn execute_spawn_agent<'a>(
             let task_id = harness.background_tasks.spawn(
                 agent_name_bg.clone(),
                 session_id_bg.clone(),
-                run_background_agent(harness_arc, agent_name_bg, session_id_bg, prompt.clone(), model_ov),
+                run_background_agent(
+                    harness_arc,
+                    agent_name_bg,
+                    session_id_bg,
+                    prompt.clone(),
+                    model_ov,
+                ),
             )?;
 
             let mut output = tool::ToolOutput::text(format!(
                 "Agent '{agent_name}' spawned in background.\nTask ID: {task_id}\nSession: {child_session}"
             ));
-            output.metadata.insert("task_id".to_string(), serde_json::json!(task_id));
-            output.metadata.insert("session_id".to_string(), serde_json::json!(child_session));
-            output.metadata.insert("background".to_string(), serde_json::json!(true));
+            output
+                .metadata
+                .insert("task_id".to_string(), serde_json::json!(task_id));
+            output
+                .metadata
+                .insert("session_id".to_string(), serde_json::json!(child_session));
+            output
+                .metadata
+                .insert("background".to_string(), serde_json::json!(true));
             Ok(output)
         } else {
             harness.bus.publish(bus::AgentEvent::SubagentSpawned {
@@ -683,9 +806,8 @@ fn execute_spawn_agent<'a>(
                 agent: agent_name.clone(),
             });
 
-            let mut runtime =
-                AgentRuntime::new(agent_name.clone(), child_session.clone(), 10)
-                    .with_logger(harness);
+            let mut runtime = AgentRuntime::new(agent_name.clone(), child_session.clone(), 10)
+                .with_logger(harness);
             runtime.model_override = model_ov;
             runtime.interactive = false;
 
@@ -698,10 +820,9 @@ fn execute_spawn_agent<'a>(
                         result: result.response.clone(),
                     });
                     let mut output = tool::ToolOutput::text(&result.response);
-                    output.metadata.insert(
-                        "session_id".to_string(),
-                        serde_json::json!(child_session),
-                    );
+                    output
+                        .metadata
+                        .insert("session_id".to_string(), serde_json::json!(child_session));
                     output.metadata.insert(
                         "tool_calls".to_string(),
                         serde_json::json!(result.tool_calls_made),
@@ -732,24 +853,46 @@ fn agent_cost_to_tier(cost: agent::AgentCost) -> ModelCostTier {
 fn is_retryable_error(err: &str) -> bool {
     let lower = err.to_lowercase();
     let patterns = [
-        "connection", "timeout", "timed out", "dns", "reset by peer",
-        "broken pipe", "network", "econnrefused", "econnreset",
-        "etimedout", "429", "rate limit", "too many requests",
-        "503", "502", "504", "529", "service unavailable", "overloaded",
+        "connection",
+        "timeout",
+        "timed out",
+        "dns",
+        "reset by peer",
+        "broken pipe",
+        "network",
+        "econnrefused",
+        "econnreset",
+        "etimedout",
+        "429",
+        "rate limit",
+        "too many requests",
+        "503",
+        "502",
+        "504",
+        "529",
+        "service unavailable",
+        "overloaded",
     ];
     patterns.iter().any(|p| lower.contains(p))
 }
 
 fn is_rate_limit_error(err: &str) -> bool {
     let lower = err.to_lowercase();
-    lower.contains("429") || lower.contains("rate limit") || lower.contains("too many requests") || lower.contains("529")
+    lower.contains("429")
+        || lower.contains("rate limit")
+        || lower.contains("too many requests")
+        || lower.contains("529")
 }
 
 fn parse_retry_after(err: &str) -> Option<u64> {
     let lower = err.to_lowercase();
     if let Some(pos) = lower.find("retry-after") {
         let after = &err[pos + 12..];
-        let num: String = after.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
+        let num: String = after
+            .chars()
+            .skip_while(|c| !c.is_ascii_digit())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
         num.parse::<u64>().ok()
     } else {
         None
@@ -811,7 +954,13 @@ async fn run_background_agent(
     }
 }
 
-fn dump_turn(dump_dir: &PathBuf, agent_name: &str, turn: u32, suffix: &str, content: &impl serde::Serialize) {
+fn dump_turn(
+    dump_dir: &PathBuf,
+    agent_name: &str,
+    turn: u32,
+    suffix: &str,
+    content: &impl serde::Serialize,
+) {
     if !tracing::enabled!(tracing::Level::TRACE) {
         return;
     }

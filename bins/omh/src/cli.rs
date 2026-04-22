@@ -19,7 +19,7 @@ pub async fn run_cli(prompt: &str, agent: &str, continue_last: bool) -> Result<(
 
     if harness.provider_registry.list().is_empty() {
         bail!(
-            "no provider configured. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GITHUB_COPILOT_TOKEN, or run 'omh auth login <provider> --key <api_key>'."
+            "no provider configured. Set OPENAI_API_KEY or ANTHROPIC_API_KEY, or run 'omh auth login <provider> --key <api_key>'."
         );
     }
 
@@ -62,7 +62,10 @@ pub async fn run_cli(prompt: &str, agent: &str, continue_last: bool) -> Result<(
         .wait_all(std::time::Duration::from_secs(300))
         .await;
     if pending > 0 {
-        eprintln!("⚠ {} background task(s) still running after timeout", pending);
+        eprintln!(
+            "⚠ {} background task(s) still running after timeout",
+            pending
+        );
     }
 
     let tool_time_ms: u64 = result.tool_calls.iter().map(|tc| tc.duration_ms).sum();
@@ -95,8 +98,7 @@ pub(crate) fn register_providers_from_env(harness: &mut runtime::Harness) -> Res
     }
 
     if let Ok(key) = env::var("ANTHROPIC_API_KEY") {
-        let model =
-            env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-4-0".to_string());
+        let model = env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-4-0".to_string());
         let provider =
             provider::anthropic::AnthropicProvider::new(reqwest::Client::new(), key, model);
         harness

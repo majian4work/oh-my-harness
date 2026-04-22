@@ -8,7 +8,7 @@ use std::{
 
 use message::ContentPart;
 use provider::mock::{MockProvider, MockResponse, MockToolCall};
-use runtime::{AgentRuntime, Harness};
+use runtime::{AgentRuntime, ErrorCategory, Harness, read_tool_telemetry_jsonl};
 
 #[tokio::test]
 async fn agent_turn_returns_text_response() {
@@ -191,11 +191,51 @@ async fn tool_results_accumulate_across_turns() {
         .unwrap();
     let mut runtime = AgentRuntime::new("acc-agent".into(), session.id, 10);
 
-    let result = runtime.run_turn(&harness, "summarize project").await.unwrap();
+    let result = runtime
+        .run_turn(&harness, "summarize project")
+        .await
+        .unwrap();
 
     assert_eq!(result.response, "summary complete");
     assert!(result.completed);
     assert_eq!(call_count.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn tool_telemetry_records_error_category() {
+    let workspace = TestWorkspace::new("runtime-tool-telemetry-error-category");
+    workspace.write_agent("err-agent", agent_markdown("err-agent", "FullAccess"));
+
+    let mut harness = Harness::init(workspace.root()).unwrap();
+    let provider = MockProvider::new(vec![
+        MockResponse::ToolCalls(vec![MockToolCall {
+            id: "tool-1".to_string(),
+            name: "nope".to_string(),
+            arguments: serde_json::json!({}),
+        }]),
+        MockResponse::Text("handled tool failure".to_string()),
+    ]);
+    harness
+        .provider_registry
+        .register("mock", Box::new(provider));
+
+    let session = harness
+        .session_manager
+        .create("err-agent", "mock-model", workspace.root())
+        .unwrap();
+    let mut runtime = AgentRuntime::new("err-agent".to_string(), session.id.clone(), 4);
+
+    let result = runtime
+        .run_turn(&harness, "run missing tool")
+        .await
+        .unwrap();
+    assert_eq!(result.response, "handled tool failure");
+
+    let path = harness.session_manager.tool_telemetry_path(&session.id);
+    let records = read_tool_telemetry_jsonl(&path).unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(!records[0].success);
+    assert_eq!(records[0].error_category, Some(ErrorCategory::ToolNotFound));
 }
 
 fn agent_markdown(name: &str, permission_level: &str) -> String {

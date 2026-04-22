@@ -16,11 +16,13 @@ A multi-agent orchestration framework written in Rust. Ships with an AI coding a
 - **Crash recovery** — WAL-based mid-turn recovery + git snapshots
 - **Multi-frontend** — TUI (default), CLI one-shot
 - **Provider auth management** — `omh auth login/logout/list/status`, TUI popup (Ctrl+A)
+- **Turn telemetry** — per-session JSONL metrics for latency, loop depth, tool usage, and token consumption
 
 ## Workspace layout
 
 ```
-bins/omh/          # Binary — TUI, CLI
+bins/omh/          # User-facing app package — TUI, CLI, shared app library
+bins/omh-dev/      # Developer tooling package — diagnose, telemetry, eval
 libs/
   message/         # Message, Role, ContentPart types
   trace/           # Logging (omh-trace)
@@ -52,6 +54,42 @@ cargo run -p omh -- cli "explain this codebase"
 # Provider auth
 cargo run -p omh -- auth login openai --key sk-...
 cargo run -p omh -- auth status
+```
+
+## Developer Tooling
+
+Developer-only diagnostics and eval commands live in the separate `omh-dev` binary:
+
+```bash
+# Telemetry summary for recent sessions
+cargo run -p omh-dev -- telemetry
+
+# Telemetry details for one session
+cargo run -p omh-dev -- telemetry ses_xxx
+
+# Diagnose one session dump
+cargo run -p omh-dev -- diagnose ses_xxx
+
+# Run task evals from tests/evals/*.toml
+cargo run -p omh-dev -- eval
+
+# Run a specific eval file
+cargo run -p omh-dev -- eval tests/evals/smoke.toml
+```
+
+Minimal eval file format:
+
+```toml
+[[cases]]
+name = "basic greeting"
+agent = "orchestrator"
+prompt = "Reply with the word hello and nothing else"
+contains_all = ["hello"]
+not_contains = ["error"]
+min_tool_calls = 0
+max_tool_calls = 0
+max_tool_errors = 0
+disallow_error_categories = ["timeout", "provider"]
 ```
 
 ## Configuration

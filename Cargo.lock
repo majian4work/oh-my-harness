@@ -1323,6 +1323,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "omh-dev"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "omh-trace",
+ "provider",
+ "reqwest",
+ "runtime",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "omh-trace"
 version = "0.1.0"
 dependencies = [

@@ -235,7 +235,10 @@ pub async fn cmd_auth(cmd: AuthCmd) -> Result<()> {
             );
             creds.save()?;
             println!("✓ Provider '{}' configured successfully", provider);
-            println!("  Credentials saved to {}", Credentials::global_path().display());
+            println!(
+                "  Credentials saved to {}",
+                Credentials::global_path().display()
+            );
         }
         AuthCmd::Logout { provider } => {
             let mut creds = Credentials::load()?;
@@ -288,9 +291,7 @@ pub async fn cmd_auth(cmd: AuthCmd) -> Result<()> {
 
             if env_keys.is_empty() && creds.providers.is_empty() {
                 println!("  No providers configured.");
-                println!(
-                    "\n  Set environment variables (OPENAI_API_KEY, ANTHROPIC_API_KEY, GITHUB_COPILOT_TOKEN)"
-                );
+                println!("\n  Set environment variables (OPENAI_API_KEY, ANTHROPIC_API_KEY)");
                 println!("  Or use: omh auth login <provider> --key <api_key>");
             }
         }
@@ -398,7 +399,11 @@ pub async fn cmd_update_best_models(global: bool) -> Result<()> {
 
     let mut agent_info = String::new();
     for a in &builtin_agents {
-        let current_model = a.model.as_ref().map(|m| m.model_id.as_str()).unwrap_or("none");
+        let current_model = a
+            .model
+            .as_ref()
+            .map(|m| m.model_id.as_str())
+            .unwrap_or("none");
         agent_info.push_str(&format!(
             "- {} ({:?}): {}, cost={:?}, current_model={}\n",
             a.name, a.mode, a.description, a.cost, current_model
@@ -409,7 +414,10 @@ pub async fn cmd_update_best_models(global: bool) -> Result<()> {
     for (provider_id, models) in &fresh_models {
         for m in models {
             let name = m.name.as_deref().unwrap_or(&m.id);
-            model_info.push_str(&format!("- provider={}, id={}, name={}\n", provider_id, m.id, name));
+            model_info.push_str(&format!(
+                "- provider={}, id={}, name={}\n",
+                provider_id, m.id, name
+            ));
         }
     }
 
@@ -456,9 +464,8 @@ pub async fn cmd_update_best_models(global: bool) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("LLM returned invalid response:\n{response_text}"))?;
 
     let recommendations: std::collections::HashMap<String, AgentModelRecommendation> =
-        serde_json::from_str(json_str).with_context(|| {
-            format!("failed to parse LLM response as JSON:\n{response_text}")
-        })?;
+        serde_json::from_str(json_str)
+            .with_context(|| format!("failed to parse LLM response as JSON:\n{response_text}"))?;
 
     let mut overrides = std::collections::HashMap::new();
     let builtin_names: std::collections::BTreeSet<_> =
@@ -560,291 +567,4 @@ fn extract_json(text: &str) -> Option<&str> {
         }
     }
     None
-}
-
-pub async fn cmd_diagnose(session_id: &str) -> Result<()> {
-    let harness = crate::init_harness()?;
-    let dump_dir = harness.session_manager.dump_dir(session_id);
-
-    if !dump_dir.exists() {
-        bail!(
-            "No dumps found for session {session_id}. Run with OMH_LOG=trace to enable dumps."
-        );
-    }
-
-    let mut agents: Vec<String> = Vec::new();
-    for entry in std::fs::read_dir(&dump_dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            agents.push(entry.file_name().to_string_lossy().into_owned());
-        }
-    }
-    agents.sort();
-
-    let mut total_anomalies = 0;
-
-    for agent in &agents {
-        let agent_dir = dump_dir.join(agent);
-        let mut turn = 1u32;
-
-        println!("═══ Agent: {} ═══", agent);
-
-        loop {
-            let request_path = agent_dir.join(format!("turn_{turn:03}_request.json"));
-            let response_path = agent_dir.join(format!("turn_{turn:03}_response.json"));
-            let tool_results_path = agent_dir.join(format!("turn_{turn:03}_tool_results.json"));
-
-            if !request_path.exists() {
-                break;
-            }
-
-            let request_text = std::fs::read_to_string(&request_path)?;
-            let request: serde_json::Value = serde_json::from_str(&request_text)?;
-
-            let model = request.get("model").and_then(|v| v.as_str()).unwrap_or("?");
-            let msg_count = request
-                .get("messages")
-                .and_then(|v| v.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0);
-
-            if response_path.exists() {
-                let response_text = std::fs::read_to_string(&response_path)?;
-                let response: serde_json::Value = serde_json::from_str(&response_text)?;
-                let tool_calls = count_tool_calls(&response);
-                let response_text_content = extract_text_content(&response);
-
-                println!(
-                    "  Turn {turn}: model={model} msgs={msg_count} tool_calls={tool_calls}"
-                );
-
-                let anomalies = check_turn_anomalies(
-                    turn,
-                    &request,
-                    &response,
-                    tool_results_path.exists().then(|| tool_results_path.as_path()),
-                )?;
-
-                for anomaly in &anomalies {
-                    println!("    ⚠ {anomaly}");
-                    total_anomalies += 1;
-                }
-
-                if !response_text_content.is_empty() {
-                    let preview = if response_text_content.len() > 120 {
-                        format!("{}...", &response_text_content[..120])
-                    } else {
-                        response_text_content.clone()
-                    };
-                    println!("    text: {preview}");
-                }
-            }
-
-            turn += 1;
-        }
-
-        println!();
-    }
-
-    if total_anomalies == 0 {
-        println!("✓ No anomalies detected.");
-    } else {
-        println!("⚠ {} anomaly(ies) detected.", total_anomalies);
-    }
-
-    Ok(())
-}
-
-fn count_tool_calls(response: &serde_json::Value) -> usize {
-    response
-        .get("parts")
-        .and_then(|v| v.as_array())
-        .map(|parts| {
-            parts
-                .iter()
-                .filter(|p| p.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
-                .count()
-        })
-        .unwrap_or(0)
-}
-
-fn extract_text_content(response: &serde_json::Value) -> String {
-    response
-        .get("parts")
-        .and_then(|v| v.as_array())
-        .map(|parts| {
-            parts
-                .iter()
-                .filter_map(|p| {
-                    if p.get("type").and_then(|t| t.as_str()) == Some("text") {
-                        p.get("text").and_then(|t| t.as_str()).map(String::from)
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .unwrap_or_default()
-}
-
-fn check_turn_anomalies(
-    turn: u32,
-    request: &serde_json::Value,
-    response: &serde_json::Value,
-    tool_results_path: Option<&std::path::Path>,
-) -> Result<Vec<String>> {
-    let mut anomalies = Vec::new();
-
-    let messages = request
-        .get("messages")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    let mut tool_result_data: Vec<(String, usize)> = Vec::new();
-    for msg in &messages {
-        if let Some(parts) = msg.get("parts").and_then(|v| v.as_array()) {
-            for part in parts {
-                if part.get("type").and_then(|t| t.as_str()) == Some("tool_result") {
-                    let content = part
-                        .get("content")
-                        .and_then(|c| c.as_str())
-                        .unwrap_or("");
-                    let is_error = part
-                        .get("is_error")
-                        .and_then(|e| e.as_bool())
-                        .unwrap_or(false);
-                    if !is_error && !content.is_empty() {
-                        let id = part
-                            .get("id")
-                            .and_then(|i| i.as_str())
-                            .unwrap_or("?")
-                            .to_string();
-                        tool_result_data.push((id, content.len()));
-                    }
-                }
-            }
-        }
-    }
-
-    // Anomaly 1: model received non-empty tool_results but final text says "no files" / "inaccessible"
-    let response_text = extract_text_content(response).to_lowercase();
-    let negative_phrases = [
-        "no usable file",
-        "could not inspect",
-        "inaccessible",
-        "no readable",
-        "no visible",
-        "could not reliably",
-        "did not return",
-        "returned no",
-        "no project files",
-    ];
-
-    let has_substantial_data = tool_result_data.iter().any(|(_, len)| *len > 100);
-    let has_negative_conclusion = negative_phrases
-        .iter()
-        .any(|phrase| response_text.contains(phrase));
-
-    if has_substantial_data && has_negative_conclusion {
-        let total_bytes: usize = tool_result_data.iter().map(|(_, len)| *len).sum();
-        anomalies.push(format!(
-            "DATA_IGNORED: Model received {} bytes of tool_result data across {} results but concluded negatively",
-            total_bytes,
-            tool_result_data.len()
-        ));
-    }
-
-    // Anomaly 2: model called the same tool with same args as a previous turn
-    if turn > 1 {
-        let response_tools = extract_tool_calls(response);
-        let prev_tool_calls = extract_request_tool_calls(&messages);
-
-        for (name, args) in &response_tools {
-            for (prev_name, prev_args) in &prev_tool_calls {
-                if name == prev_name && args == prev_args {
-                    anomalies.push(format!(
-                        "DUPLICATE_CALL: Model re-called {name} with identical args as a previous turn"
-                    ));
-                    break;
-                }
-            }
-        }
-    }
-
-    // Anomaly 3: subagent spawn failure in tool_results
-    if let Some(path) = tool_results_path {
-        let tr_text = std::fs::read_to_string(path)?;
-        let tr: serde_json::Value = serde_json::from_str(&tr_text)?;
-        if let Some(parts) = tr.get("parts").and_then(|v| v.as_array()) {
-            for part in parts {
-                let is_error = part
-                    .get("is_error")
-                    .and_then(|e| e.as_bool())
-                    .unwrap_or(false);
-                let content = part
-                    .get("content")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("");
-                if is_error && content.contains("token count") && content.contains("exceeds") {
-                    anomalies.push(format!(
-                        "TOKEN_OVERFLOW: Subagent failed with token limit: {}",
-                        &content[..content.len().min(120)]
-                    ));
-                }
-                if is_error && content.contains("failed") {
-                    anomalies.push(format!(
-                        "TOOL_ERROR: {}",
-                        &content[..content.len().min(120)]
-                    ));
-                }
-            }
-        }
-    }
-
-    Ok(anomalies)
-}
-
-fn extract_tool_calls(response: &serde_json::Value) -> Vec<(String, String)> {
-    response
-        .get("parts")
-        .and_then(|v| v.as_array())
-        .map(|parts| {
-            parts
-                .iter()
-                .filter_map(|p| {
-                    if p.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                        let name = p.get("name").and_then(|n| n.as_str()).unwrap_or("?");
-                        let input = p
-                            .get("input")
-                            .map(|i| i.to_string())
-                            .unwrap_or_default();
-                        Some((name.to_string(), input))
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn extract_request_tool_calls(messages: &[serde_json::Value]) -> Vec<(String, String)> {
-    let mut calls = Vec::new();
-    for msg in messages {
-        if let Some(parts) = msg.get("parts").and_then(|v| v.as_array()) {
-            for part in parts {
-                if part.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                    let name = part.get("name").and_then(|n| n.as_str()).unwrap_or("?");
-                    let input = part
-                        .get("input")
-                        .map(|i| i.to_string())
-                        .unwrap_or_default();
-                    calls.push((name.to_string(), input));
-                }
-            }
-        }
-    }
-    calls
 }

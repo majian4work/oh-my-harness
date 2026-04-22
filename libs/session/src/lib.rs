@@ -56,7 +56,10 @@ impl SessionManager {
 
     fn session_dir(&self, id: &str) -> PathBuf {
         if let Some((parent_id, agent_name)) = id.split_once(':') {
-            self.sessions_dir.join(parent_id).join("agents").join(agent_name)
+            self.sessions_dir
+                .join(parent_id)
+                .join("agents")
+                .join(agent_name)
         } else {
             self.sessions_dir.join(id)
         }
@@ -72,6 +75,14 @@ impl SessionManager {
 
     pub fn dump_dir(&self, id: &str) -> PathBuf {
         self.session_dir(id).join("dumps")
+    }
+
+    pub fn telemetry_path(&self, id: &str) -> PathBuf {
+        self.session_dir(id).join("telemetry.jsonl")
+    }
+
+    pub fn tool_telemetry_path(&self, id: &str) -> PathBuf {
+        self.session_dir(id).join("tool_telemetry.jsonl")
     }
 
     pub fn create(&self, agent: &str, model: &str, workspace_root: &Path) -> Result<Session> {

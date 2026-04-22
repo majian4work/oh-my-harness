@@ -22,4 +22,7 @@ test PROMPT="Parse this project and summarize its main components and functional
     cargo run -r -p omh -- --log trace cli "{{PROMPT}}"
 
 diagnose SESSION_ID:
-    cargo run -r -p omh -- diagnose "{{SESSION_ID}}"
+    cargo run -r -p omh-dev -- diagnose "{{SESSION_ID}}"
+
+omh-dev *args:
+    cargo run -r -p omh-dev -- "$@"
