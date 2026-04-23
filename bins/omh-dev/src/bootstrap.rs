@@ -38,8 +38,7 @@ pub enum ProviderType {
 
 impl Credentials {
     pub fn global_path() -> PathBuf {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(".cache/omh/credentials.json")
+        dirs::cache_dir().join("credentials.json")
     }
 
     pub fn project_path(workspace_root: &std::path::Path) -> PathBuf {
@@ -107,16 +106,6 @@ pub fn register_providers_from_env(harness: &mut Harness) -> Result<()> {
             .register("anthropic", Box::new(provider));
     }
 
-    if let Some(oauth_token) = read_copilot_hosts_token() {
-        if harness.provider_registry.get("copilot").is_none() {
-            let model = env::var("COPILOT_MODEL").ok();
-            let provider = CopilotProvider::new(oauth_token, model);
-            harness
-                .provider_registry
-                .register("copilot", Box::new(provider));
-        }
-    }
-
     let creds = Credentials::load().unwrap_or_default();
     for (name, cred) in &creds.providers {
         if harness.provider_registry.get(name).is_some() {
@@ -161,34 +150,4 @@ pub fn register_providers_from_env(harness: &mut Harness) -> Result<()> {
     }
 
     Ok(())
-}
-
-pub fn read_copilot_hosts_token() -> Option<String> {
-    let config_dir = copilot_config_dir()?;
-    for filename in ["hosts.json", "apps.json"] {
-        let path = config_dir.join(filename);
-        if let Ok(content) = std::fs::read_to_string(&path)
-            && let Some(token) = extract_oauth_token(&content, "github.com")
-        {
-            return Some(token);
-        }
-    }
-    None
-}
-
-fn copilot_config_dir() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join(".config/github-copilot"))
-}
-
-fn extract_oauth_token(contents: &str, domain: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(contents).ok()?;
-    let obj = value.as_object()?;
-    obj.iter().find_map(|(key, val)| {
-        if key.starts_with(domain) {
-            val.get("oauth_token")?.as_str().map(ToString::to_string)
-        } else {
-            None
-        }
-    })
 }

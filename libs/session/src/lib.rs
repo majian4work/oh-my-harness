@@ -250,6 +250,22 @@ impl SessionManager {
     }
 
     pub fn list(&self, limit: usize) -> Result<Vec<SessionSummary>> {
+        self.list_filtered(limit, None)
+    }
+
+    pub fn list_for_workspace(
+        &self,
+        limit: usize,
+        workspace_root: &Path,
+    ) -> Result<Vec<SessionSummary>> {
+        self.list_filtered(limit, Some(workspace_root))
+    }
+
+    fn list_filtered(
+        &self,
+        limit: usize,
+        workspace_filter: Option<&Path>,
+    ) -> Result<Vec<SessionSummary>> {
         let mut entries: Vec<_> = fs::read_dir(&self.sessions_dir)?
             .filter_map(|e| e.ok())
             .filter(|e| e.path().is_dir())
@@ -262,13 +278,21 @@ impl SessionManager {
         });
 
         let mut summaries = Vec::new();
-        for entry in entries.into_iter().take(limit) {
+        for entry in entries {
+            if summaries.len() >= limit {
+                break;
+            }
             let session_file = entry.path().join("session.jsonl");
             if let Ok(file) = fs::File::open(&session_file) {
                 let mut reader = BufReader::new(file);
                 let mut header_line = String::new();
                 if reader.read_line(&mut header_line).is_ok() {
                     if let Ok(header) = serde_json::from_str::<SessionHeader>(&header_line) {
+                        if let Some(ws) = workspace_filter {
+                            if header.workspace_root != ws {
+                                continue;
+                            }
+                        }
                         let message_count = reader.lines().filter(|l| l.is_ok()).count();
                         let updated_at = entry
                             .metadata()

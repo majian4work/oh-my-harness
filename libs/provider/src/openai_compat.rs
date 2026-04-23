@@ -73,6 +73,16 @@ impl OpenAICompatProvider {
         }
     }
 
+    /// Newer OpenAI models (gpt-5.x, o3, o4, etc.) require `max_completion_tokens`
+    /// instead of `max_tokens`.
+    fn needs_max_completion_tokens(model: &str) -> bool {
+        let m = model.to_lowercase();
+        m.starts_with("gpt-5")
+            || m.starts_with("o3")
+            || m.starts_with("o4")
+            || m.starts_with("o1")
+    }
+
     fn build_payload(
         &self,
         request: &CompletionRequest,
@@ -99,13 +109,22 @@ impl OpenAICompatProvider {
                 .collect::<Vec<_>>(),
         );
 
+        let model = self.effective_model(request);
+        let use_max_completion_tokens = Self::needs_max_completion_tokens(&model);
+        let (max_tokens, max_completion_tokens) = if use_max_completion_tokens {
+            (None, request.max_tokens)
+        } else {
+            (request.max_tokens, None)
+        };
+
         OpenAIChatCompletionRequest {
-            model: self.effective_model(request),
+            model,
             messages,
             tools: (!request.tools.is_empty())
                 .then(|| request.tools.iter().map(Self::map_tool).collect::<Vec<_>>()),
             temperature: request.temperature,
-            max_tokens: request.max_tokens,
+            max_tokens,
+            max_completion_tokens,
             stream,
             stream_options: stream.then_some(OpenAIStreamOptions {
                 include_usage: true,
@@ -483,6 +502,8 @@ struct OpenAIChatCompletionRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<OpenAIStreamOptions>,

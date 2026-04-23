@@ -26,3 +26,47 @@ diagnose SESSION_ID:
 
 omh-dev *args:
     cargo run -r -p omh-dev -- "$@"
+
+# --- Copilot API diagnostics ---
+
+# Read the omh oauth token from credentials file
+_copilot-oauth-token:
+    @python3 -c 'import json; print(json.load(open("{{env("HOME")}}/.cache/omh/credentials.json"))["providers"]["copilot"]["api_key"])'
+
+# Exchange oauth token for a short-lived Copilot bearer token
+_copilot-bearer-token:
+    @curl -s \
+      -H "Authorization: token $(just _copilot-oauth-token)" \
+      -H "User-Agent: GitHubCopilotChat/0.26.7" \
+      -H "Editor-Version: vscode/1.99.3" \
+      -H "Editor-Plugin-Version: copilot-chat/0.26.7" \
+      "https://api.github.com/copilot_internal/v2/token" \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["token"])'
+
+# List available Copilot models
+copilot-models:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    TOKEN=$(just _copilot-bearer-token)
+    curl -s \
+      -H "Authorization: Bearer $TOKEN" \
+      -H "User-Agent: GitHubCopilotChat/0.26.7" \
+      -H "Editor-Version: vscode/1.99.3" \
+      "https://api.githubcopilot.com/models" \
+    | python3 -c 'import json,sys; [print(m["id"]) for m in json.load(sys.stdin).get("data",[])]'
+
+# Test a Copilot model with a simple prompt (default: gpt-5.2)
+copilot-test model="gpt-5.2" prompt="hi":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    TOKEN=$(just _copilot-bearer-token)
+    echo ">>> Testing model: {{model}}"
+    curl -s -w "\nHTTP: %{http_code}\n" -X POST \
+      "https://api.githubcopilot.com/chat/completions" \
+      -H "Authorization: Bearer $TOKEN" \
+      -H "User-Agent: GitHubCopilotChat/0.26.7" \
+      -H "Editor-Version: vscode/1.99.3" \
+      -H "Editor-Plugin-Version: copilot-chat/0.26.7" \
+      -H "Copilot-Integration-Id: vscode-chat" \
+      -H "Content-Type: application/json" \
+      -d "{\"model\":\"{{model}}\",\"messages\":[{\"role\":\"user\",\"content\":\"{{prompt}}\"}],\"max_completion_tokens\":20,\"stream\":false}"

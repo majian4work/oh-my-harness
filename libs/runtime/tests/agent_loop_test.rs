@@ -15,7 +15,7 @@ async fn agent_turn_returns_text_response() {
     let workspace = TestWorkspace::new("runtime-agent-loop-text");
     workspace.write_agent("test-agent", agent_markdown("test-agent", "ReadOnly"));
 
-    let mut harness = Harness::init(workspace.root()).unwrap();
+    let mut harness = workspace.init_harness();
     let provider = MockProvider::text("hello from mock");
     harness
         .provider_registry
@@ -45,7 +45,7 @@ async fn agent_turn_executes_tool_calls() {
     let workspace = TestWorkspace::new("runtime-agent-loop-tools");
     workspace.write_agent("tool-agent", agent_markdown("tool-agent", "FullAccess"));
 
-    let mut harness = Harness::init(workspace.root()).unwrap();
+    let mut harness = workspace.init_harness();
     let provider = MockProvider::new(vec![
         MockResponse::ToolCalls(vec![MockToolCall {
             id: "tool-1".to_string(),
@@ -93,7 +93,7 @@ async fn agent_turn_respects_max_turns() {
     let workspace = TestWorkspace::new("runtime-agent-loop-max-turns");
     workspace.write_agent("loop-agent", agent_markdown("loop-agent", "FullAccess"));
 
-    let mut harness = Harness::init(workspace.root()).unwrap();
+    let mut harness = workspace.init_harness();
     let provider = MockProvider::new(vec![
         looping_tool_call("tool-1"),
         looping_tool_call("tool-2"),
@@ -130,7 +130,7 @@ async fn tool_results_accumulate_across_turns() {
     let workspace = TestWorkspace::new("runtime-tool-results-accumulate");
     workspace.write_agent("acc-agent", agent_markdown("acc-agent", "FullAccess"));
 
-    let mut harness = Harness::init(workspace.root()).unwrap();
+    let mut harness = workspace.init_harness();
 
     let call_count = Arc::new(AtomicUsize::new(0));
     let call_count_clone = call_count.clone();
@@ -206,7 +206,7 @@ async fn tool_telemetry_records_error_category() {
     let workspace = TestWorkspace::new("runtime-tool-telemetry-error-category");
     workspace.write_agent("err-agent", agent_markdown("err-agent", "FullAccess"));
 
-    let mut harness = Harness::init(workspace.root()).unwrap();
+    let mut harness = workspace.init_harness();
     let provider = MockProvider::new(vec![
         MockResponse::ToolCalls(vec![MockToolCall {
             id: "tool-1".to_string(),
@@ -257,6 +257,14 @@ impl TestWorkspace {
 
     fn root(&self) -> &Path {
         &self.root
+    }
+
+    fn sessions_dir(&self) -> PathBuf {
+        self.root.join("sessions")
+    }
+
+    fn init_harness(&self) -> Harness {
+        Harness::init_with_sessions_dir(self.root(), self.sessions_dir()).unwrap()
     }
 
     fn write_agent(&self, name: &str, content: String) {

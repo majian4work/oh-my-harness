@@ -28,7 +28,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use provider::ModelInfo;
+use provider::{ModelInfo, ModelSpec};
 use runtime::AgentRuntime;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -247,7 +247,12 @@ impl App {
 
     fn load_most_recent_session(&mut self) {
         let Some(harness) = &self.harness else { return };
-        if let Ok(sessions) = harness.session_manager.list(1) {
+        let cwd = std::env::current_dir().ok();
+        let sessions = cwd
+            .as_deref()
+            .map(|ws| harness.session_manager.list_for_workspace(1, ws))
+            .unwrap_or_else(|| harness.session_manager.list(1));
+        if let Ok(sessions) = sessions {
             if let Some(s) = sessions.first() {
                 self.load_session(&s.id);
             } else {
@@ -453,7 +458,12 @@ impl App {
                     }
                 }
                 // Flush remaining assistant content
-                flush_assistant(&mut assistant_buf, &mut assistant_first_ts, &mut assistant_last_ts, &mut self.messages);
+                flush_assistant(
+                    &mut assistant_buf,
+                    &mut assistant_first_ts,
+                    &mut assistant_last_ts,
+                    &mut self.messages,
+                );
             }
             Err(e) => {
                 self.messages.push(ChatMessage::new(
@@ -578,10 +588,22 @@ impl App {
         let max_visible = 8.min(state.items.len());
         let popup_height = max_visible as u16 + 2;
 
+        let content_width = state
+            .items
+            .iter()
+            .map(|s| {
+                // "▸ " (2) + label + "  " (2) + description
+                2 + s.label.len() + 2 + s.description.len()
+            })
+            .max()
+            .unwrap_or(20) as u16
+            + 2; // border padding
+        let popup_width = content_width.max(40).min(input_area.width);
+
         let popup_area = Rect {
             x: input_area.x,
             y: input_area.y.saturating_sub(popup_height),
-            width: input_area.width.min(60),
+            width: popup_width,
             height: popup_height,
         };
 
@@ -638,12 +660,17 @@ impl App {
     }
 
     fn set_active_model(&mut self, provider_id: &str, model_id: &str) -> Result<()> {
-        let mut config = OmhConfig::load().unwrap_or_default();
-        config.active_model = Some(crate::auth::ActiveModel {
+        let active = crate::auth::ActiveModel {
             provider_id: provider_id.to_string(),
             model_id: model_id.to_string(),
-        });
+        };
+        let config = OmhConfig {
+            active_model: Some(active),
+        };
         config.save()?;
+        if let Ok(cwd) = std::env::current_dir() {
+            let _ = config.save_to(&OmhConfig::project_path(&cwd));
+        }
         self.provider_id = provider_id.to_string();
         self.model_id = model_id.to_string();
         self.refresh_status();
@@ -697,6 +724,10 @@ impl App {
         self.refresh_status();
 
         let agent_name = DEFAULT_AGENT.to_string();
+        let model_override = ModelSpec {
+            model_id: self.model_id.clone(),
+            provider_id: Some(self.provider_id.clone()),
+        };
         let max_turns = harness
             .agent_registry
             .get(DEFAULT_AGENT)
@@ -705,6 +736,7 @@ impl App {
         tokio::spawn(async move {
             let runtime = AgentRuntime::new(agent_name, session_id.clone(), max_turns);
             let mut runtime = runtime.with_logger(&harness);
+            runtime.model_override = Some(model_override);
             runtime.shared_harness = Some(harness.clone());
             if let Err(error) = runtime.run_turn(&harness, &text).await {
                 harness.bus.publish(bus::AgentEvent::Error {
@@ -821,8 +853,9 @@ impl App {
                     }
                     let status = if is_error { " ✗" } else { "" };
                     let args_summary = compact_tool_args(&args);
-                    self.streaming_text
-                        .push_str(&format!("⚙ {tool}{status} ({duration_ms}ms) {args_summary}\n"));
+                    self.streaming_text.push_str(&format!(
+                        "⚙ {tool}{status} ({duration_ms}ms) {args_summary}\n"
+                    ));
                     // Show truncated result (first 3 lines, max 200 chars)
                     let preview: String = result.lines().take(3).collect::<Vec<_>>().join("\n");
                     let preview = if preview.len() > 200 {
@@ -1162,8 +1195,11 @@ impl App {
             (end, start)
         };
         let mut result = String::new();
+        if plain.is_empty() {
+            return result;
+        }
 
-        for row_idx in start.0..=end.0.min(plain.len().saturating_sub(1)) {
+        for row_idx in start.0..=end.0.min(plain.len() - 1) {
             if row_idx > start.0 {
                 result.push('\n');
             }
@@ -1840,9 +1876,11 @@ impl App {
                     let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
                     let is_tool_line = line_text.starts_with("⚙") || line_text.starts_with("  │");
                     if is_tool_line {
-                        spans.extend(line.spans.into_iter().map(|s| {
-                            Span::styled(s.content, Style::default().fg(palette::MUTED))
-                        }));
+                        spans.extend(
+                            line.spans.into_iter().map(|s| {
+                                Span::styled(s.content, Style::default().fg(palette::MUTED))
+                            }),
+                        );
                     } else {
                         spans.extend(line.spans);
                     }

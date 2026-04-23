@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use dialoguer::{Confirm, Input, Password, Select};
+use dialoguer::{Input, Password, Select};
 use memory::{MemoryEntry, MemoryKind, MemorySource, Scope};
 use provider::{CompletionRequest, SystemMessage};
 use runtime::harness::AgentOverride;
@@ -301,17 +301,6 @@ pub async fn cmd_auth(cmd: AuthCmd) -> Result<()> {
 }
 
 async fn copilot_login() -> Result<String> {
-    if let Some(token) = auth::read_copilot_hosts_token() {
-        println!("Found existing GitHub Copilot token in ~/.config/github-copilot/");
-        let use_existing = Confirm::new()
-            .with_prompt("Use this token?")
-            .default(true)
-            .interact()?;
-        if use_existing {
-            return Ok(token);
-        }
-    }
-
     println!("Starting GitHub OAuth device flow...");
     let client = reqwest::Client::new();
     let device = auth::start_device_flow(&client).await?;
@@ -495,9 +484,9 @@ pub async fn cmd_update_best_models(global: bool) -> Result<()> {
     runtime::Harness::write_agent_overrides(&workspace_root, &overrides, global)?;
 
     let target = if global {
-        "~/.config/omh/config.toml"
+        dirs::config_dir().join("config.toml").display().to_string()
     } else {
-        ".omh/config.toml"
+        ".omh/config.toml".to_string()
     };
     println!("\nWrote agent overrides to {target}");
     Ok(())

@@ -73,9 +73,7 @@ impl AgentRegistry {
         let workspace_root = workspace_root.as_ref();
         let mut paths = Vec::new();
 
-        if let Some(home) = std::env::var_os("HOME") {
-            paths.push(PathBuf::from(home).join(".config/omh/agents"));
-        }
+        paths.push(dirs::config_dir().join("agents"));
 
         paths.push(workspace_root.join(".omh/agents"));
 

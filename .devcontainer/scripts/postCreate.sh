@@ -35,6 +35,10 @@ fi
 # hack X11 forwarding
 save_env 'DISPLAY=$(hostname):10'
 
+unset_env 'HTTP_PROXY'
+unset_env 'HTTPS_PROXY'
+unset_env 'ALL_PROXY'
+unset_env 'NO_PROXY'
 if [ -n "$http_proxy" ]; then
     echo "use_proxy=yes" >> ~/.wgetrc
     echo "http_proxy=$http_proxy" >> ~/.wgetrc

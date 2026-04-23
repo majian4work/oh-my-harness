@@ -416,7 +416,25 @@ impl AgentRuntime {
                             None => return Err(last_err),
                         }
                     } else if err_msg.contains("not accessible") || err_msg.contains("not found") || err_msg.contains("not supported") {
-                        let fallback_model = provider.model_for_tier(cost_hint.unwrap_or(ModelCostTier::Medium));
+                        let tier = cost_hint.unwrap_or(ModelCostTier::Medium);
+                        let fallback_model = provider.model_for_tier(tier);
+                        let fallback_model = if fallback_model == model_id {
+                            match tier {
+                                ModelCostTier::High => provider.model_for_tier(ModelCostTier::Medium),
+                                ModelCostTier::Medium => provider.model_for_tier(ModelCostTier::Low),
+                                ModelCostTier::Low => {
+                                    tracing::error!(
+                                        agent = %self.agent_name,
+                                        model = %model_id,
+                                        error = %err_msg,
+                                        "No fallback model available"
+                                    );
+                                    return Err(e);
+                                }
+                            }
+                        } else {
+                            fallback_model
+                        };
                         tracing::warn!(
                             agent = %self.agent_name,
                             model = %model_id,
@@ -982,7 +1000,10 @@ fn sanitize_messages(messages: &mut Vec<Message>) {
                 }
             }
             Role::User => {
-                let all_tool_results = msg.parts.iter().all(|p| matches!(p, ContentPart::ToolResult { .. }));
+                let all_tool_results = msg
+                    .parts
+                    .iter()
+                    .all(|p| matches!(p, ContentPart::ToolResult { .. }));
                 if all_tool_results && !msg.parts.is_empty() {
                     let any_known = msg.parts.iter().any(|p| {
                         if let ContentPart::ToolResult { id, .. } = p {
@@ -1000,7 +1021,10 @@ fn sanitize_messages(messages: &mut Vec<Message>) {
         }
     }
     if !to_remove.is_empty() {
-        tracing::warn!(count = to_remove.len(), "removing orphaned tool_result messages");
+        tracing::warn!(
+            count = to_remove.len(),
+            "removing orphaned tool_result messages"
+        );
         for idx in to_remove.into_iter().rev() {
             messages.remove(idx);
         }

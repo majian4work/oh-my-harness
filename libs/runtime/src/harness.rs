@@ -70,9 +70,15 @@ pub struct Harness {
 
 impl Harness {
     pub fn init(workspace_root: impl AsRef<Path>) -> Result<Self> {
+        Self::init_with_sessions_dir(workspace_root, dirs::sessions_dir())
+    }
+
+    pub fn init_with_sessions_dir(
+        workspace_root: impl AsRef<Path>,
+        sessions_dir: PathBuf,
+    ) -> Result<Self> {
         let workspace_root = workspace_root.as_ref();
         let harness_dir = workspace_root.join(".omh");
-        let sessions_dir = harness_dir.join("sessions");
 
         std::fs::create_dir_all(&harness_dir)?;
 
@@ -123,17 +129,16 @@ impl Harness {
         if !statuses.is_empty() {
             let mut current = self.mcp_statuses.lock().unwrap();
             *current = statuses.clone();
-            self.bus.publish(AgentEvent::McpServersChanged {
-                servers: statuses,
-            });
+            self.bus
+                .publish(AgentEvent::McpServersChanged { servers: statuses });
         }
     }
 
     fn load_agent_overrides(workspace_root: &Path) -> HashMap<String, AgentOverride> {
         let mut overrides = HashMap::new();
 
-        if let Some(home) = std::env::var_os("HOME") {
-            let global_path = PathBuf::from(home).join(".config/omh/config.toml");
+        {
+            let global_path = dirs::config_dir().join("config.toml");
             if let Ok(content) = std::fs::read_to_string(&global_path) {
                 if let Ok(config) = toml::from_str::<ProjectConfig>(&content) {
                     overrides.extend(config.agents);
@@ -157,8 +162,7 @@ impl Harness {
         global: bool,
     ) -> Result<()> {
         let config_path = if global {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            PathBuf::from(home).join(".config/omh/config.toml")
+            dirs::config_dir().join("config.toml")
         } else {
             workspace_root.join(".omh/config.toml")
         };
@@ -176,7 +180,10 @@ impl Harness {
                 entry.insert("model".to_string(), toml::Value::String(model.clone()));
             }
             if let Some(provider) = &ov.provider {
-                entry.insert("provider".to_string(), toml::Value::String(provider.clone()));
+                entry.insert(
+                    "provider".to_string(),
+                    toml::Value::String(provider.clone()),
+                );
             }
             agents_table.insert(name.clone(), toml::Value::Table(entry));
         }
@@ -226,8 +233,8 @@ impl Harness {
     ) -> (McpToolBridge, Vec<McpServerStatus>) {
         let mut merged_mcp = Self::builtin_mcp_servers();
 
-        if let Some(home) = std::env::var_os("HOME") {
-            let global_path = PathBuf::from(home).join(".config/omh/config.toml");
+        {
+            let global_path = dirs::config_dir().join("config.toml");
             if let Ok(content) = std::fs::read_to_string(&global_path) {
                 if let Ok(config) = toml::from_str::<ProjectConfig>(&content) {
                     merged_mcp.extend(config.mcp);
@@ -274,9 +281,8 @@ impl Harness {
                             for spec in &tools {
                                 let tool_client = client.clone();
                                 let tool_spec = spec.clone();
-                                tool_registry.register(Box::new(McpToolProxy::new(
-                                    tool_client, tool_spec,
-                                )));
+                                tool_registry
+                                    .register(Box::new(McpToolProxy::new(tool_client, tool_spec)));
                             }
                             tools.len()
                         }
@@ -315,7 +321,7 @@ mod tests {
         let temp_dir = unique_temp_dir();
         let harness = Harness::init(&temp_dir).unwrap();
 
-        assert!(temp_dir.join(".omh/sessions").exists());
+        assert!(dirs::sessions_dir().exists());
         assert!(temp_dir.join(".omh/memory").exists());
         assert!(harness.agent_registry.get("orchestrator").is_some());
         assert!(harness.skill_registry.get("update-best-models").is_some());

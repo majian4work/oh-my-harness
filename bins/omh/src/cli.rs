@@ -24,7 +24,9 @@ pub async fn run_cli(prompt: &str, agent: &str, continue_last: bool) -> Result<(
     }
 
     let session_id = if continue_last {
-        let sessions = harness.session_manager.list(1)?;
+        let sessions = harness
+            .session_manager
+            .list_for_workspace(1, &workspace_root)?;
         match sessions.first() {
             Some(s) => s.id.clone(),
             None => {
@@ -104,16 +106,6 @@ pub(crate) fn register_providers_from_env(harness: &mut runtime::Harness) -> Res
         harness
             .provider_registry
             .register("anthropic", Box::new(provider));
-    }
-
-    if let Some(oauth_token) = auth::read_copilot_hosts_token() {
-        if harness.provider_registry.get("copilot").is_none() {
-            let model = env::var("COPILOT_MODEL").ok();
-            let provider = provider::copilot::CopilotProvider::new(oauth_token, model);
-            harness
-                .provider_registry
-                .register("copilot", Box::new(provider));
-        }
     }
 
     let creds = auth::Credentials::load().unwrap_or_default();

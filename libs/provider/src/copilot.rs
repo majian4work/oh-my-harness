@@ -24,11 +24,13 @@ use crate::{
 const GITHUB_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
 const TOKEN_EXCHANGE_URL: &str = "https://api.github.com/copilot_internal/v2/token";
 const DEFAULT_CHAT_URL: &str = "https://api.githubcopilot.com/chat/completions";
+const DEFAULT_RESPONSES_URL: &str = "https://api.githubcopilot.com/responses";
 
 const USER_AGENT: &str = "GitHubCopilotChat/0.26.7";
 const EDITOR_VERSION: &str = "vscode/1.99.3";
 const EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.26.7";
 const COPILOT_INTEGRATION_ID: &str = "vscode-chat";
+const OPENAI_INTENT: &str = "conversation-edits";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CopilotToken {
@@ -111,6 +113,7 @@ impl CopilotProvider {
             "copilot-integration-id",
             HeaderValue::from_static(COPILOT_INTEGRATION_ID),
         );
+        headers.insert("openai-intent", HeaderValue::from_static(OPENAI_INTENT));
         headers
     }
 
@@ -123,12 +126,39 @@ impl CopilotProvider {
             .unwrap_or_else(|| DEFAULT_CHAT_URL.to_string())
     }
 
+    fn responses_url(&self, token: &CopilotToken) -> String {
+        token
+            .endpoints
+            .as_ref()
+            .and_then(|endpoints| endpoints.api.as_deref())
+            .map(|api| format!("{}/responses", api.trim_end_matches('/')))
+            .unwrap_or_else(|| DEFAULT_RESPONSES_URL.to_string())
+    }
+
+    /// GPT-5+ models (except gpt-5-mini) require the Responses API.
+    fn needs_responses_api(model: &str) -> bool {
+        let m = model.to_lowercase();
+        if let Some(rest) = m.strip_prefix("gpt-") {
+            if let Some(major) = rest.chars().next().and_then(|c| c.to_digit(10)) {
+                return major >= 5 && !m.starts_with("gpt-5-mini");
+            }
+        }
+        false
+    }
+
     fn effective_model(&self, request: &CompletionRequest) -> String {
         if request.model.trim().is_empty() {
             self.model.clone()
         } else {
             request.model.clone()
         }
+    }
+
+    /// Newer OpenAI models (gpt-5.x, o3, o4, etc.) require `max_completion_tokens`
+    /// instead of `max_tokens`.
+    fn needs_max_completion_tokens(model: &str) -> bool {
+        let m = model.to_lowercase();
+        m.starts_with("gpt-5") || m.starts_with("o3") || m.starts_with("o4") || m.starts_with("o1")
     }
 
     fn build_payload(
@@ -157,13 +187,22 @@ impl CopilotProvider {
                 .collect::<Vec<_>>(),
         );
 
+        let model = self.effective_model(request);
+        let use_max_completion_tokens = Self::needs_max_completion_tokens(&model);
+        let (max_tokens, max_completion_tokens) = if use_max_completion_tokens {
+            (None, request.max_tokens)
+        } else {
+            (request.max_tokens, None)
+        };
+
         OpenAIChatCompletionRequest {
-            model: self.effective_model(request),
+            model,
             messages,
             tools: (!request.tools.is_empty())
                 .then(|| request.tools.iter().map(Self::map_tool).collect::<Vec<_>>()),
             temperature: request.temperature,
-            max_tokens: request.max_tokens,
+            max_tokens,
+            max_completion_tokens,
             stream,
             stream_options: stream.then_some(OpenAIStreamOptions {
                 include_usage: true,
@@ -251,6 +290,250 @@ impl CopilotProvider {
             .headers(Self::copilot_headers())
             .bearer_auth(&token.token)
             .header(CONTENT_TYPE, "application/json")
+            .header("x-initiator", "user")
+    }
+
+    fn responses_request_builder(&self, token: &CopilotToken) -> reqwest::RequestBuilder {
+        self.client
+            .post(self.responses_url(token))
+            .headers(Self::copilot_headers())
+            .bearer_auth(&token.token)
+            .header(CONTENT_TYPE, "application/json")
+            .header("x-initiator", "user")
+    }
+
+    fn build_responses_payload(
+        &self,
+        request: &CompletionRequest,
+        stream: bool,
+    ) -> ResponsesApiRequest {
+        let mut input: Vec<ResponsesInputItem> = Vec::new();
+
+        // System messages become "developer" role in Responses API
+        for system in &request.system {
+            input.push(ResponsesInputItem::Message {
+                role: "developer".to_string(),
+                content: ResponsesContent::Text(system.content.clone()),
+            });
+        }
+
+        for message in &request.messages {
+            match &message.role {
+                Role::User => {
+                    let mut parts = Vec::new();
+                    for part in &message.parts {
+                        match part {
+                            ContentPart::Text { text } | ContentPart::Thinking { text } => {
+                                parts.push(ResponsesContentPart::InputText { text: text.clone() });
+                            }
+                            ContentPart::Image { media_type, data } => {
+                                parts.push(ResponsesContentPart::InputImage {
+                                    image_url: format!("data:{media_type};base64,{data}"),
+                                });
+                            }
+                            ContentPart::ToolResult {
+                                id,
+                                content: result_content,
+                                ..
+                            } => {
+                                input.push(ResponsesInputItem::FunctionCallOutput {
+                                    call_id: id.clone(),
+                                    output: result_content.clone(),
+                                });
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !parts.is_empty() {
+                        input.push(ResponsesInputItem::Message {
+                            role: "user".to_string(),
+                            content: ResponsesContent::Parts(parts),
+                        });
+                    }
+                }
+                Role::Assistant => {
+                    // Collect text content first
+                    for part in &message.parts {
+                        match part {
+                            ContentPart::Text { text } | ContentPart::Thinking { text } => {
+                                input.push(ResponsesInputItem::Message {
+                                    role: "assistant".to_string(),
+                                    content: ResponsesContent::Parts(vec![
+                                        ResponsesContentPart::OutputText { text: text.clone() },
+                                    ]),
+                                });
+                            }
+                            ContentPart::ToolUse {
+                                id,
+                                name,
+                                input: args,
+                            } => {
+                                input.push(ResponsesInputItem::FunctionCall {
+                                    call_id: id.clone(),
+                                    name: name.clone(),
+                                    arguments: args.to_string(),
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Role::System => {
+                    for part in &message.parts {
+                        if let ContentPart::Text { text } = part {
+                            input.push(ResponsesInputItem::Message {
+                                role: "developer".to_string(),
+                                content: ResponsesContent::Text(text.clone()),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        let tools = if request.tools.is_empty() {
+            None
+        } else {
+            Some(
+                request
+                    .tools
+                    .iter()
+                    .map(|tool| ResponsesTool {
+                        kind: "function".to_string(),
+                        name: tool.name.clone(),
+                        description: tool.description.clone(),
+                        parameters: tool.input_schema.clone(),
+                    })
+                    .collect(),
+            )
+        };
+
+        ResponsesApiRequest {
+            model: self.effective_model(request),
+            input,
+            tools,
+            max_output_tokens: request.max_tokens,
+            stream,
+        }
+    }
+
+    async fn stream_responses(
+        &self,
+        token: &CopilotToken,
+        request: &CompletionRequest,
+    ) -> Result<StreamResult> {
+        let payload = self.build_responses_payload(request, true);
+        let response = self
+            .responses_request_builder(token)
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            if let Ok(req_json) = serde_json::to_string(&payload) {
+                tracing::error!(status = %status, body = %body, request = %req_json, "copilot responses streaming request failed");
+            }
+            bail!("copilot responses streaming request failed with status {status}: {body}");
+        }
+
+        let mut bytes_stream = response.bytes_stream();
+        let (sender, receiver) = mpsc::unbounded::<Result<StreamEvent>>();
+
+        tokio::spawn(async move {
+            let mut sender = sender;
+            let mut parser = ResponsesSseParser::default();
+
+            while let Some(chunk) = bytes_stream.next().await {
+                match chunk {
+                    Ok(bytes) => {
+                        if let Err(err) = parser.push_chunk(&bytes, &mut sender) {
+                            let _ = sender.unbounded_send(Err(err));
+                            return;
+                        }
+                    }
+                    Err(err) => {
+                        let _ = sender.unbounded_send(Err(err.into()));
+                        return;
+                    }
+                }
+            }
+
+            if let Err(err) = parser.finish(&mut sender) {
+                let _ = sender.unbounded_send(Err(err));
+            }
+        });
+
+        Ok(Box::pin(receiver))
+    }
+
+    async fn complete_responses(
+        &self,
+        token: &CopilotToken,
+        request: &CompletionRequest,
+    ) -> Result<CompletionResponse> {
+        let payload = self.build_responses_payload(request, false);
+        let response = self
+            .responses_request_builder(token)
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            if let Ok(req_json) = serde_json::to_string(&payload) {
+                tracing::error!(status = %status, body = %body, request = %req_json, "copilot responses request failed");
+            }
+            bail!("copilot responses request failed with status {status}: {body}");
+        }
+
+        let resp: ResponsesApiResponse = response.json().await?;
+        let mut parts = Vec::new();
+
+        for item in resp.output {
+            match item {
+                ResponsesOutputItem::Message { content, .. } => {
+                    for c in content {
+                        if !c.text.is_empty() {
+                            parts.push(ContentPart::Text { text: c.text });
+                        }
+                    }
+                }
+                ResponsesOutputItem::FunctionCall {
+                    call_id,
+                    name,
+                    arguments,
+                    ..
+                } => {
+                    parts.push(ContentPart::ToolUse {
+                        id: call_id,
+                        name,
+                        input: parse_tool_arguments(arguments),
+                    });
+                }
+                ResponsesOutputItem::Unknown => {}
+            }
+        }
+
+        let usage = resp.usage;
+        let created_at = now_unix_millis();
+        Ok(CompletionResponse {
+            message: Message {
+                id: format!("copilot-{created_at}"),
+                role: Role::Assistant,
+                parts,
+                created_at,
+            },
+            usage: UsageStats {
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+            },
+        })
     }
 }
 
@@ -274,6 +557,12 @@ impl Provider for CopilotProvider {
 
     async fn stream(&self, request: CompletionRequest) -> Result<StreamResult> {
         let token = self.get_copilot_token().await?;
+        let model = self.effective_model(&request);
+
+        if Self::needs_responses_api(&model) {
+            return self.stream_responses(&token, &request).await;
+        }
+
         let payload = self.build_payload(&request, true);
         let response = self
             .chat_request_builder(&token)
@@ -322,6 +611,12 @@ impl Provider for CopilotProvider {
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
         let token = self.get_copilot_token().await?;
+        let model = self.effective_model(&request);
+
+        if Self::needs_responses_api(&model) {
+            return self.complete_responses(&token, &request).await;
+        }
+
         let payload = self.build_payload(&request, false);
         let response = self
             .chat_request_builder(&token)
@@ -567,6 +862,8 @@ struct OpenAIChatCompletionRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<OpenAIStreamOptions>,
@@ -738,6 +1035,273 @@ impl From<OpenAIUsage> for UsageStats {
     }
 }
 
+// --- Responses API types ---
+
+#[derive(Debug, Clone, Serialize)]
+struct ResponsesApiRequest {
+    model: String,
+    input: Vec<ResponsesInputItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ResponsesTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_output_tokens: Option<u32>,
+    stream: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ResponsesInputItem {
+    Message {
+        role: String,
+        content: ResponsesContent,
+    },
+    #[serde(rename = "function_call")]
+    FunctionCall {
+        call_id: String,
+        name: String,
+        arguments: String,
+    },
+    #[serde(rename = "function_call_output")]
+    FunctionCallOutput { call_id: String, output: String },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+enum ResponsesContent {
+    Text(String),
+    Parts(Vec<ResponsesContentPart>),
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ResponsesContentPart {
+    InputText { text: String },
+    InputImage { image_url: String },
+    OutputText { text: String },
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ResponsesTool {
+    #[serde(rename = "type")]
+    kind: String,
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ResponsesApiResponse {
+    #[allow(dead_code)]
+    id: String,
+    output: Vec<ResponsesOutputItem>,
+    usage: ResponsesUsage,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ResponsesOutputItem {
+    Message {
+        #[allow(dead_code)]
+        id: String,
+        content: Vec<ResponsesOutputText>,
+    },
+    #[serde(rename = "function_call")]
+    FunctionCall {
+        #[allow(dead_code)]
+        id: String,
+        call_id: String,
+        name: String,
+        arguments: String,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ResponsesOutputText {
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ResponsesUsage {
+    #[serde(default)]
+    input_tokens: u32,
+    #[serde(default)]
+    output_tokens: u32,
+}
+
+// --- Responses API SSE parser ---
+
+#[derive(Default)]
+struct ResponsesSseParser {
+    buffer: String,
+    active_tool_calls: HashMap<String, String>,
+    saw_done: bool,
+}
+
+impl ResponsesSseParser {
+    fn push_chunk(
+        &mut self,
+        bytes: &[u8],
+        sender: &mut mpsc::UnboundedSender<Result<StreamEvent>>,
+    ) -> Result<()> {
+        self.buffer.push_str(&String::from_utf8_lossy(bytes));
+
+        while let Some(newline_index) = self.buffer.find('\n') {
+            let line = self.buffer.drain(..=newline_index).collect::<String>();
+            self.process_line(line.trim_end_matches(['\r', '\n']), sender)?;
+        }
+
+        Ok(())
+    }
+
+    fn finish(&mut self, sender: &mut mpsc::UnboundedSender<Result<StreamEvent>>) -> Result<()> {
+        if !self.buffer.trim().is_empty() {
+            let remaining = std::mem::take(&mut self.buffer);
+            self.process_line(remaining.trim_end_matches(['\r', '\n']), sender)?;
+        }
+
+        if !self.saw_done {
+            self.emit_tool_call_ends(sender);
+            let _ = sender.unbounded_send(Ok(StreamEvent::Done));
+            self.saw_done = true;
+        }
+
+        Ok(())
+    }
+
+    fn process_line(
+        &mut self,
+        line: &str,
+        sender: &mut mpsc::UnboundedSender<Result<StreamEvent>>,
+    ) -> Result<()> {
+        let line = line.trim();
+        if line.is_empty() || !line.starts_with("data: ") {
+            return Ok(());
+        }
+
+        let data = &line[6..];
+        if data == "[DONE]" {
+            self.emit_tool_call_ends(sender);
+            let _ = sender.unbounded_send(Ok(StreamEvent::Done));
+            self.saw_done = true;
+            return Ok(());
+        }
+
+        let event: serde_json::Value = serde_json::from_str(data)?;
+        self.emit_event(&event, sender);
+        Ok(())
+    }
+
+    fn emit_event(
+        &mut self,
+        event: &serde_json::Value,
+        sender: &mut mpsc::UnboundedSender<Result<StreamEvent>>,
+    ) {
+        let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+        match event_type {
+            "response.output_text.delta" => {
+                if let Some(delta) = event.get("delta").and_then(|v| v.as_str()) {
+                    if !delta.is_empty() {
+                        let _ =
+                            sender.unbounded_send(Ok(StreamEvent::TextDelta(delta.to_string())));
+                    }
+                }
+            }
+            "response.output_item.added" => {
+                if let Some(item) = event.get("item") {
+                    let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if item_type == "function_call" {
+                        let call_id = item
+                            .get("call_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let name = item
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if !call_id.is_empty() && !name.is_empty() {
+                            self.active_tool_calls
+                                .insert(call_id.clone(), call_id.clone());
+                            let _ = sender.unbounded_send(Ok(StreamEvent::ToolCallStart {
+                                id: call_id,
+                                name,
+                            }));
+                        }
+                    }
+                }
+            }
+            "response.function_call_arguments.delta" => {
+                if let Some(delta) = event.get("delta").and_then(|v| v.as_str()) {
+                    let call_id = event.get("item_id").and_then(|v| v.as_str()).unwrap_or("");
+                    // Look up the actual call_id from active_tool_calls or use item_id
+                    let id = self
+                        .active_tool_calls
+                        .values()
+                        .next()
+                        .cloned()
+                        .unwrap_or_else(|| call_id.to_string());
+                    if !delta.is_empty() {
+                        let _ = sender.unbounded_send(Ok(StreamEvent::ToolCallDelta {
+                            id,
+                            args_chunk: delta.to_string(),
+                        }));
+                    }
+                }
+            }
+            "response.output_item.done" => {
+                if let Some(item) = event.get("item") {
+                    let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if item_type == "function_call" {
+                        let call_id = item
+                            .get("call_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if !call_id.is_empty() {
+                            self.active_tool_calls.remove(&call_id);
+                            let _ =
+                                sender.unbounded_send(Ok(StreamEvent::ToolCallEnd { id: call_id }));
+                        }
+                    }
+                }
+            }
+            "response.completed" => {
+                if let Some(usage) = event.get("response").and_then(|r| r.get("usage")) {
+                    let input_tokens = usage
+                        .get("input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32;
+                    let output_tokens = usage
+                        .get("output_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32;
+                    let _ = sender.unbounded_send(Ok(StreamEvent::Usage(UsageStats {
+                        input_tokens,
+                        output_tokens,
+                        cache_read_tokens: None,
+                        cache_creation_tokens: None,
+                    })));
+                }
+                self.emit_tool_call_ends(sender);
+                let _ = sender.unbounded_send(Ok(StreamEvent::Done));
+                self.saw_done = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn emit_tool_call_ends(&mut self, sender: &mut mpsc::UnboundedSender<Result<StreamEvent>>) {
+        for id in self.active_tool_calls.drain().map(|(_, id)| id) {
+            let _ = sender.unbounded_send(Ok(StreamEvent::ToolCallEnd { id }));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -765,6 +1329,7 @@ mod tests {
             headers.get("copilot-integration-id").unwrap(),
             COPILOT_INTEGRATION_ID
         );
+        assert_eq!(headers.get("openai-intent").unwrap(), OPENAI_INTENT);
     }
 
     #[tokio::test]
@@ -783,5 +1348,16 @@ mod tests {
         let token = provider.get_session_token().await.unwrap();
 
         assert_eq!(token, "session-token");
+    }
+
+    #[test]
+    fn needs_responses_api_detects_gpt5_models() {
+        assert!(CopilotProvider::needs_responses_api("gpt-5"));
+        assert!(CopilotProvider::needs_responses_api("gpt-5.4"));
+        assert!(CopilotProvider::needs_responses_api("gpt-5-latest"));
+        assert!(!CopilotProvider::needs_responses_api("gpt-5-mini"));
+        assert!(!CopilotProvider::needs_responses_api("gpt-4.1"));
+        assert!(!CopilotProvider::needs_responses_api("claude-opus-4.6"));
+        assert!(!CopilotProvider::needs_responses_api("o3"));
     }
 }

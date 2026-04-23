@@ -5,6 +5,7 @@ members = [
     "libs/acp",
     "libs/agent",
     "libs/bus",
+    "libs/dirs",
     "libs/evolution",
     "libs/hook",
     "libs/mcp",
@@ -29,6 +30,7 @@ syntect = "5"
 acp = { path = "libs/acp" }
 agent = { path = "libs/agent" }
 bus = { path = "libs/bus" }
+dirs = { path = "libs/dirs" }
 evolution = { path = "libs/evolution" }
 hook = { path = "libs/hook" }
 mcp = { path = "libs/mcp" }

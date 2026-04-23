@@ -53,10 +53,7 @@ fn build_exact_level_filter(level: Level) -> tracing_subscriber::filter::Targets
 }
 
 fn log_dir() -> std::path::PathBuf {
-    std::env::var("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .join(".cache/omh/logs")
+    dirs::log_dir()
 }
 
 fn make_file_layer(level: Level) -> Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync> {

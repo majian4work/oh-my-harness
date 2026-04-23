@@ -28,6 +28,7 @@ name = "agent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dirs",
  "glob",
  "permission",
  "regex",
@@ -494,6 +495,10 @@ dependencies = [
  "thiserror 1.0.69",
  "zeroize",
 ]
+
+[[package]]
+name = "dirs"
+version = "0.1.0"
 
 [[package]]
 name = "displaydoc"
@@ -1311,6 +1316,7 @@ dependencies = [
  "clap",
  "crossterm 0.29.0",
  "dialoguer",
+ "dirs",
  "futures",
  "mcp",
  "memory",
@@ -1339,6 +1345,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "dirs",
  "omh-trace",
  "provider",
  "reqwest",
@@ -1354,6 +1361,7 @@ dependencies = [
 name = "omh-trace"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -1761,6 +1769,7 @@ dependencies = [
  "async-trait",
  "bus",
  "chrono",
+ "dirs",
  "evolution",
  "futures",
  "hook",
@@ -2031,6 +2040,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "dirs",
  "glob",
  "serde",
  "serde_json",

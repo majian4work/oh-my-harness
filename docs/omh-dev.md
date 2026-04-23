@@ -18,11 +18,11 @@ just omh-dev <command>
 
 ## Command Overview
 
-| Command | Purpose |
-|---------|---------|
-| `diagnose <session_id>` | Analyze session dump files and detect model behavior anomalies |
+| Command                  | Purpose                                                                       |
+| ------------------------ | ----------------------------------------------------------------------------- |
+| `diagnose <session_id>`  | Analyze session dump files and detect model behavior anomalies                |
 | `telemetry [session_id]` | View turn-level telemetry stats; omit session_id to summarize recent sessions |
-| `eval [path]` | Run TOML-based eval cases and produce a JSON report |
+| `eval [path]`            | Run TOML-based eval cases and produce a JSON report                           |
 
 Global option: `--log <level>` (default: `info`).
 
@@ -30,7 +30,7 @@ Global option: `--log <level>` (default: `info`).
 
 ## diagnose — Session Diagnostics
 
-Reads request/response JSON from `.omh/sessions/<session>/dumps/`, analyzes each turn, and reports anomalies.
+Reads request/response JSON from `~/.cache/omh/sessions/<session>/dumps/`, analyzes each turn, and reports anomalies.
 
 ### Prerequisites
 
@@ -61,18 +61,18 @@ just diagnose ses_abc123
 
 ### Detected Anomaly Types
 
-| Tag | Description |
-|-----|-------------|
-| `DATA_IGNORED` | Model received a large amount of tool_result data but produced a negative conclusion |
-| `DUPLICATE_CALL` | Model re-called the same tool with identical arguments across different turns |
-| `TOKEN_OVERFLOW` | A sub-agent failed due to token limit exceeded |
-| `TOOL_ERROR` | tool_results contain `is_error=true` with "failed" in the message |
+| Tag              | Description                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------ |
+| `DATA_IGNORED`   | Model received a large amount of tool_result data but produced a negative conclusion |
+| `DUPLICATE_CALL` | Model re-called the same tool with identical arguments across different turns        |
+| `TOKEN_OVERFLOW` | A sub-agent failed due to token limit exceeded                                       |
+| `TOOL_ERROR`     | tool_results contain `is_error=true` with "failed" in the message                    |
 
 ---
 
 ## telemetry — Telemetry Statistics
 
-Reads `.omh/sessions/<session>/telemetry.jsonl` and displays latency, token usage, tool call frequency, and other metrics.
+Reads `~/.cache/omh/sessions/<session>/telemetry.jsonl` and displays latency, token usage, tool call frequency, and other metrics.
 
 ### Inspect a Single Session
 
@@ -155,19 +155,19 @@ disallow_error_categories = ["timeout", "provider"]  # forbidden error categorie
 
 #### Available Error Categories
 
-| Value | Description |
-|-------|-------------|
-| `timeout` | Request timed out |
-| `rate_limit` | Rate limit triggered |
-| `permission` | Insufficient permissions |
-| `tool_not_found` | Requested tool does not exist |
-| `invalid_input` | Malformed input |
-| `model_access` | Model unavailable |
-| `context_window` | Context window exceeded |
-| `provider` | Provider returned an error |
-| `tool_execution` | Tool execution failed |
-| `max_turns_reached` | Maximum turn count reached |
-| `unknown` | Uncategorized error |
+| Value               | Description                   |
+| ------------------- | ----------------------------- |
+| `timeout`           | Request timed out             |
+| `rate_limit`        | Rate limit triggered          |
+| `permission`        | Insufficient permissions      |
+| `tool_not_found`    | Requested tool does not exist |
+| `invalid_input`     | Malformed input               |
+| `model_access`      | Model unavailable             |
+| `context_window`    | Context window exceeded       |
+| `provider`          | Provider returned an error    |
+| `tool_execution`    | Tool execution failed         |
+| `max_turns_reached` | Maximum turn count reached    |
+| `unknown`           | Uncategorized error           |
 
 ### Output
 

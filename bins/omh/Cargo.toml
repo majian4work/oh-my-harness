@@ -13,6 +13,7 @@ chrono = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 dialoguer = "0.11"
 crossterm = { workspace = true }
+dirs = { workspace = true }
 futures = { workspace = true }
 mcp = { workspace = true }
 memory = { workspace = true }

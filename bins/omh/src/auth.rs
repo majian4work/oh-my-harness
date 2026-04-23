@@ -48,8 +48,7 @@ pub enum ProviderType {
 
 impl Credentials {
     pub fn global_path() -> PathBuf {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(".cache/omh/credentials.json")
+        dirs::cache_dir().join("credentials.json")
     }
 
     pub fn project_path(workspace_root: &std::path::Path) -> PathBuf {
@@ -108,14 +107,14 @@ impl Credentials {
 
 impl OmhConfig {
     pub fn global_path() -> PathBuf {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(".config/omh/config.toml")
+        dirs::config_dir().join("config.toml")
     }
 
     pub fn project_path(workspace_root: &std::path::Path) -> PathBuf {
         workspace_root.join(".omh/config.toml")
     }
 
+    #[allow(dead_code)]
     fn load_from(path: &std::path::Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
@@ -125,6 +124,7 @@ impl OmhConfig {
         toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))
     }
 
+    #[allow(dead_code)]
     pub fn load() -> Result<Self> {
         let global = Self::load_from(&Self::global_path())?;
         if let Ok(cwd) = std::env::current_dir() {
@@ -172,8 +172,7 @@ const MODELS_CACHE_TTL_SECS: u64 = 86400;
 
 impl ModelsCache {
     pub fn path() -> PathBuf {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(".cache/omh/models_cache.json")
+        dirs::cache_dir().join("models_cache.json")
     }
 
     pub fn load() -> Self {
@@ -259,44 +258,7 @@ pub fn check_env_providers() -> Vec<(String, String)> {
     if std::env::var("ANTHROPIC_API_KEY").is_ok() {
         found.push(("anthropic".to_string(), "env ANTHROPIC_API_KEY".to_string()));
     }
-    if read_copilot_hosts_token().is_some() {
-        found.push((
-            "copilot".to_string(),
-            "~/.config/github-copilot/hosts.json".to_string(),
-        ));
-    }
     found
-}
-
-/// Try to read existing OAuth token from GitHub Copilot config files.
-pub fn read_copilot_hosts_token() -> Option<String> {
-    let config_dir = copilot_config_dir()?;
-    for filename in ["hosts.json", "apps.json"] {
-        let path = config_dir.join(filename);
-        if let Ok(content) = std::fs::read_to_string(&path)
-            && let Some(token) = extract_oauth_token(&content, "github.com")
-        {
-            return Some(token);
-        }
-    }
-    None
-}
-
-fn copilot_config_dir() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join(".config/github-copilot"))
-}
-
-fn extract_oauth_token(contents: &str, domain: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(contents).ok()?;
-    let obj = value.as_object()?;
-    obj.iter().find_map(|(key, val)| {
-        if key.starts_with(domain) {
-            val.get("oauth_token")?.as_str().map(ToString::to_string)
-        } else {
-            None
-        }
-    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -381,41 +343,6 @@ pub async fn poll_for_access_token(
     }
 
     bail!("GitHub OAuth device flow timed out. Please try again.")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::extract_oauth_token;
-
-    #[test]
-    fn extracts_oauth_token_for_matching_domain() {
-        let token = extract_oauth_token(
-            r#"{"github.com":{"oauth_token":"gho_test"},"example.com":{"oauth_token":"other"}}"#,
-            "github.com",
-        );
-
-        assert_eq!(token.as_deref(), Some("gho_test"));
-    }
-
-    #[test]
-    fn ignores_non_matching_domain() {
-        let token = extract_oauth_token(
-            r#"{"enterprise.github.com":{"oauth_token":"gho_test"}}"#,
-            "github.com",
-        );
-
-        assert!(token.is_none());
-    }
-
-    #[test]
-    fn extracts_oauth_token_for_prefixed_github_domain() {
-        let token = extract_oauth_token(
-            r#"{"github.com-enterprise":{"oauth_token":"gho_test"}}"#,
-            "github.com",
-        );
-
-        assert_eq!(token.as_deref(), Some("gho_test"));
-    }
 }
 
 pub fn configured_provider_names() -> Result<Vec<String>> {

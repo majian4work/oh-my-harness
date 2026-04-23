@@ -26,6 +26,29 @@ function save_env() {
     fi
 }
 
+# unset env, remove it from current shell and bashrc/zshrc
+function unset_env() {
+    local env_key="$1"
+    local env_file
+
+    if [[ -z "$env_key" ]]; then
+        return 1
+    fi
+
+    if [[ "$SHELL" == *"zsh"* ]]; then
+        env_file="$HOME/.zshrc"
+    else
+        env_file="$HOME/.bashrc"
+    fi
+
+    unset "$env_key"
+
+    if [[ -f "$env_file" ]]; then
+        sed -i "/export $env_key=/d" "$env_file"
+        printf '%s\n' "unset $env_key" >> "$env_file"
+    fi
+}
+
 function trim_comment() {
     # can trim "//xxx" in "http://xxx"
     # "s|^[ \t]*//.*$||" all comment line

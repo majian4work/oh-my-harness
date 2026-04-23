@@ -65,10 +65,8 @@ impl SkillRegistry {
         let mut registry = Self::new();
         registry.register_builtins();
 
-        if let Some(home) = std::env::var_os("HOME") {
-            let global_dir = PathBuf::from(home).join(".config/omh/skills");
-            registry.discover_dir(&global_dir)?;
-        }
+        let global_dir = dirs::config_dir().join("skills");
+        registry.discover_dir(&global_dir)?;
 
         let project_dir = workspace_root.join(".omh/skills");
         registry.discover_dir(&project_dir)?;
@@ -77,9 +75,10 @@ impl SkillRegistry {
     }
 
     fn register_builtins(&mut self) {
-        let builtins: &[(&str, &str)] = &[
-            ("update-best-models", include_str!("../skills/update-best-models.md")),
-        ];
+        let builtins: &[(&str, &str)] = &[(
+            "update-best-models",
+            include_str!("../skills/update-best-models.md"),
+        )];
         for (name, content) in builtins {
             if let Ok(skill) = parse_skill_content(name, content) {
                 self.register(skill);

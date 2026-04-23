@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = { workspace = true }
+dirs = { workspace = true }
 glob = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }

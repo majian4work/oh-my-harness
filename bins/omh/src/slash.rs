@@ -68,7 +68,8 @@ fn list_skills(workspace_root: &Path) -> Result<SlashResult> {
     let all: Vec<_> = registry.all().collect();
     if all.is_empty() {
         return Ok(SlashResult::Response(
-            "No skills found.\nAdd skills to .omh/skills/ or ~/.config/omh/skills/".to_string(),
+            "No skills found.\nAdd skills to .omh/skills/ or $XDG_CONFIG_HOME/omh/skills/"
+                .to_string(),
         ));
     }
 
