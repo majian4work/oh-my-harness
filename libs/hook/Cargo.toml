@@ -4,8 +4,10 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+agent = { workspace = true }
 tool = { workspace = true }
 message = { workspace = true }
+permission = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }

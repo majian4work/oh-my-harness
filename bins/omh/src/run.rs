@@ -5,7 +5,7 @@ use runtime::AgentRuntime;
 
 use crate::{auth, init_harness};
 
-pub async fn run_cli(prompt: &str, agent: &str, continue_last: bool) -> Result<()> {
+pub async fn run_oneshot(prompt: &str, agent: &str, continue_last: bool) -> Result<()> {
     let mut harness = init_harness()?;
     register_providers_from_env(&mut harness)?;
 

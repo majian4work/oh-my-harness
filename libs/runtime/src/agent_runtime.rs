@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use bus::AgentEvent;
 use futures::StreamExt;
+use hook::{HookContext, HookPoint, HookResult};
 use memory::Scope;
 use message::{ContentPart, Message, Role};
 use provider::{
@@ -341,6 +342,13 @@ impl AgentRuntime {
         harness.bus.publish(AgentEvent::TurnStarted {
             session_id: self.session_id.clone(),
         });
+        {
+            let mut hook_ctx = HookContext::new(&self.session_id, &self.agent_name);
+            harness
+                .hook_runner
+                .run(HookPoint::OnTurnStart, &mut hook_ctx)
+                .await;
+        }
         self.log(
             "turn_start",
             &format!(
@@ -386,6 +394,11 @@ impl AgentRuntime {
             };
 
             dump_turn(&dump_dir, &self.agent_name, self.current_turn, "request", &request);
+
+            {
+                let mut hook_ctx = HookContext::new(&self.session_id, &self.agent_name);
+                harness.hook_runner.run(HookPoint::PreLlmCall, &mut hook_ctx).await;
+            }
 
             let stream_result = provider.stream(request.clone()).await;
             let mut stream = match stream_result {
@@ -497,6 +510,11 @@ impl AgentRuntime {
                 }
             }
 
+            {
+                let mut hook_ctx = HookContext::new(&self.session_id, &self.agent_name);
+                harness.hook_runner.run(HookPoint::PostLlmCall, &mut hook_ctx).await;
+            }
+
             let mut assistant_parts = Vec::new();
             if !text_buffer.is_empty() {
                 assistant_parts.push(ContentPart::Text {
@@ -543,6 +561,21 @@ impl AgentRuntime {
             for tool_call in &tool_calls {
                 let input =
                     serde_json::from_str(&tool_call.args).unwrap_or(serde_json::Value::Null);
+
+                {
+                    let mut hook_ctx = HookContext::new(&self.session_id, &self.agent_name);
+                    hook_ctx.tool_name = Some(tool_call.name.clone());
+                    hook_ctx.tool_input = Some(input.clone());
+                    if let HookResult::Deny(reason) = harness.hook_runner.run(HookPoint::PreToolUse, &mut hook_ctx).await {
+                        result_parts.push(ContentPart::ToolResult {
+                            id: tool_call.id.clone(),
+                            content: format!("Tool denied by hook: {reason}"),
+                            is_error: true,
+                        });
+                        continue;
+                    }
+                }
+
                 let tool_started_at = now_millis();
                 let started_at = std::time::Instant::now();
                 let ctx = ToolContext {
@@ -662,6 +695,15 @@ impl AgentRuntime {
                         }
                     }
                 }
+                {
+                    let mut hook_ctx = HookContext::new(&self.session_id, &self.agent_name);
+                    hook_ctx.tool_name = Some(tool_call.name.clone());
+                    hook_ctx.tool_output = Some(content.clone());
+                    if is_error {
+                        hook_ctx.error = Some(content.clone());
+                    }
+                    harness.hook_runner.run(HookPoint::PostToolUse, &mut hook_ctx).await;
+                }
                 result_parts.push(ContentPart::ToolResult {
                     id: tool_call.id.clone(),
                     content,
@@ -680,6 +722,55 @@ impl AgentRuntime {
             harness
                 .session_manager
                 .append_message(&self.session_id, &tool_result_msg)?;
+        }
+
+        {
+            let mut hook_ctx = HookContext::new(&self.session_id, &self.agent_name);
+            harness.hook_runner.run(HookPoint::OnTurnEnd, &mut hook_ctx).await;
+        }
+
+        // Evolution: extract learnings from the turn (best-effort)
+        // Only extract when there was substantial work (>= 3 tool calls in a completed turn)
+        if completed && total_tool_calls >= 3 {
+            let scope = Scope::Agent(self.agent_name.clone());
+            let prepared = harness.evolution.prepare_extraction_request(&messages, &self.session_id, &scope);
+            match provider.complete(prepared.request).await {
+                Ok(resp) => {
+                    let resp_text = resp.message.text();
+                    match harness.evolution.parse_extraction_response(&resp_text, &self.session_id, &scope) {
+                        Ok(entries) if !entries.is_empty() => {
+                            let count = entries.len();
+                            for entry in entries {
+                                if let Err(e) = harness.memory.remember(entry).await {
+                                    tracing::warn!(error = %e, "evolution: failed to store learning");
+                                }
+                            }
+                            tracing::info!(learnings = count, "evolution: extracted learnings");
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::debug!(error = %e, "evolution: extraction parse failed"),
+                    }
+                }
+                Err(e) => tracing::debug!(error = %e, "evolution: extraction LLM call failed"),
+            }
+
+            // Periodic consolidation
+            if self.current_turn % harness.evolution.policy().consolidation_interval == 0 {
+                let scope = Scope::Global;
+                match harness.evolution.consolidate(&scope) {
+                    Ok(report) => {
+                        if report.merged > 0 || report.pruned > 0 {
+                            tracing::info!(
+                                merged = report.merged,
+                                pruned = report.pruned,
+                                strengthened = report.strengthened,
+                                "evolution: consolidation completed"
+                            );
+                        }
+                    }
+                    Err(e) => tracing::debug!(error = %e, "evolution: consolidation failed"),
+                }
+            }
         }
 
         harness.bus.publish(AgentEvent::TurnComplete {

@@ -15,7 +15,6 @@ members = [
     "libs/provider",
     "libs/runtime",
     "libs/session", "libs/skill",
-    "libs/snapshot",
     "libs/tool",
     "libs/trace",
 ]
@@ -41,7 +40,6 @@ provider = { path = "libs/provider" }
 runtime = { path = "libs/runtime" }
 session = { path = "libs/session" }
 skill = { path = "libs/skill" }
-snapshot = { path = "libs/snapshot" }
 tool = { path = "libs/tool" }
 omh-trace = { path = "libs/trace" }
 

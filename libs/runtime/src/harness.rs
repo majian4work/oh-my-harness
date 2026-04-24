@@ -7,6 +7,7 @@ use anyhow::Result;
 use bus::{AgentEvent, EventBus, McpServerStatus};
 use evolution::{EvolutionEngine, EvolutionPolicy};
 use hook::HookRunner;
+use hook::builtins::{AuditTrailHook, ErrorTrackerHook, PermissionGuardHook};
 use mcp::{McpClient, McpToolBridge, McpToolProxy, McpTransport};
 use memory::{MarkdownMemoryStore, MemoryStore};
 use provider::ProviderRegistry;
@@ -55,7 +56,7 @@ fn default_true() -> bool {
 pub struct Harness {
     pub agent_registry: AgentRegistry,
     pub skill_registry: Arc<SkillRegistry>,
-    pub tool_registry: ToolRegistry,
+    pub tool_registry: Arc<ToolRegistry>,
     pub provider_registry: ProviderRegistry,
     pub session_manager: SessionManager,
     pub bus: EventBus,
@@ -92,12 +93,23 @@ impl Harness {
         builtins::register_builtins(&tool_registry);
         tool_registry.register(Box::new(SpawnAgentTool));
         tool_registry.register(Box::new(SkillTool::new(Arc::clone(&skill_registry))));
+        let tool_registry = Arc::new(tool_registry);
 
         let bus = EventBus::new(256);
 
         let (mcp_bridge, mcp_statuses) = (Mutex::new(McpToolBridge::new()), Mutex::new(Vec::new()));
 
         let agent_overrides = Self::load_agent_overrides(workspace_root);
+
+        let mut hook_runner = HookRunner::new();
+        hook_runner.register(Box::new(PermissionGuardHook::new(
+            agent_registry.clone(),
+            Arc::clone(&tool_registry),
+        )));
+        hook_runner.register(Box::new(ErrorTrackerHook::new(5)));
+        for audit_hook in AuditTrailHook::all() {
+            hook_runner.register(Box::new(audit_hook));
+        }
 
         Ok(Self {
             agent_registry,
@@ -107,7 +119,7 @@ impl Harness {
             session_manager,
             background_tasks: BackgroundTaskManager::new(8, bus.clone()),
             bus,
-            hook_runner: HookRunner::new(),
+            hook_runner,
             memory,
             evolution,
             mcp_bridge,

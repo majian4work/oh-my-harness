@@ -189,7 +189,7 @@ struct App {
 impl App {
     fn new() -> Result<Self> {
         let mut harness = crate::init_harness()?;
-        crate::cli::register_providers_from_env(&mut harness)?;
+        crate::run::register_providers_from_env(&mut harness)?;
         let (provider_id, model_id) = resolve_active_model(&harness);
         let bus_rx = Some(harness.bus.subscribe());
         let mcp_servers = harness.mcp_statuses.lock().unwrap().clone();
@@ -2195,7 +2195,7 @@ impl App {
 
 async fn fetch_models(force_refresh: bool) -> Result<Vec<(String, Vec<ModelInfo>)>> {
     let mut harness = crate::init_harness()?;
-    crate::cli::register_providers_from_env(&mut harness)?;
+    crate::run::register_providers_from_env(&mut harness)?;
 
     let provider_ids: Vec<String> = harness
         .provider_registry

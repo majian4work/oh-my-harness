@@ -1,6 +1,6 @@
 mod auth;
-mod cli;
 mod commands;
+mod run;
 mod slash;
 mod tui;
 
@@ -12,10 +12,8 @@ use runtime::Harness;
 use tracing::Level;
 
 use crate::{
-    cli::run_cli,
-    commands::{
-        cmd_auth, cmd_evolution, cmd_memory, cmd_sessions, cmd_snapshot, cmd_update_best_models,
-    },
+    commands::{cmd_auth, cmd_evolution, cmd_memory, cmd_sessions, cmd_update_best_models},
+    run::run_oneshot,
     tui::run_tui,
 };
 
@@ -34,13 +32,6 @@ pub enum EvolutionCmd {
     Consolidate,
     Pause,
     Resume,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum SnapshotCmd {
-    List { session_id: String },
-    Diff { snapshot_id: String },
-    Revert { snapshot_id: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -106,14 +97,17 @@ enum Mode {
         #[arg(short, long)]
         resume: bool,
     },
-    /// One-shot CLI interaction
-    Cli {
+    /// One-shot non-interactive run
+    Run {
         /// The prompt to send
         prompt: String,
         /// Agent to use
         #[arg(short, long, default_value = "orchestrator")]
         agent: String,
     },
+    /// Provider authentication management
+    #[command(subcommand)]
+    Auth(AuthCmd),
     /// List recent sessions
     Sessions {
         /// Max sessions to show
@@ -126,12 +120,6 @@ enum Mode {
     /// Evolution management
     #[command(subcommand)]
     Evolution(EvolutionCmd),
-    /// Snapshot management
-    #[command(subcommand)]
-    Snapshot(SnapshotCmd),
-    /// Provider authentication management
-    #[command(subcommand)]
-    Auth(AuthCmd),
     /// Refresh model cache and optimize agent model assignments
     UpdateBestModels {
         #[arg(short, long)]
@@ -157,11 +145,10 @@ async fn main() -> Result<()> {
             omh_trace::init(log_level);
             match args.mode.unwrap() {
                 Mode::Tui { .. } => unreachable!(),
-                Mode::Cli { prompt, agent } => run_cli(&prompt, &agent, args.r#continue).await,
+                Mode::Run { prompt, agent } => run_oneshot(&prompt, &agent, args.r#continue).await,
                 Mode::Sessions { limit } => cmd_sessions(limit).await,
                 Mode::Memory(cmd) => cmd_memory(cmd).await,
                 Mode::Evolution(cmd) => cmd_evolution(cmd).await,
-                Mode::Snapshot(cmd) => cmd_snapshot(cmd).await,
                 Mode::Auth(cmd) => cmd_auth(cmd).await,
                 Mode::UpdateBestModels { global } => cmd_update_best_models(global).await,
             }

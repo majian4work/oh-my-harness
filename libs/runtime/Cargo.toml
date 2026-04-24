@@ -22,7 +22,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 session = { workspace = true }
 skill = { workspace = true }
-snapshot = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 toml = { workspace = true }

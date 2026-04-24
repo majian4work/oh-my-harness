@@ -5,7 +5,7 @@ use provider::{CompletionRequest, SystemMessage};
 use runtime::harness::AgentOverride;
 
 use crate::{
-    AuthCmd, EvolutionCmd, MemoryCmd, SnapshotCmd,
+    AuthCmd, EvolutionCmd, MemoryCmd,
     auth::{
         self, Credentials, ModelsCache, ProviderCredential, check_env_providers, mask_key,
         provider_type_for_name,
@@ -153,31 +153,6 @@ pub async fn cmd_evolution(cmd: EvolutionCmd) -> Result<()> {
         }
         EvolutionCmd::Resume => {
             println!("Evolution resumed.");
-        }
-    }
-
-    Ok(())
-}
-
-pub async fn cmd_snapshot(cmd: SnapshotCmd) -> Result<()> {
-    let _harness = crate::init_harness()?;
-
-    match cmd {
-        SnapshotCmd::List { session_id } => {
-            println!("Snapshots for session {session_id}:");
-            println!("  (snapshot listing requires git log integration — use `git log` for now)");
-        }
-        SnapshotCmd::Diff { snapshot_id } => {
-            println!("Diff for snapshot {snapshot_id}:");
-            println!("  (use `git diff {snapshot_id}` directly)");
-        }
-        SnapshotCmd::Revert { snapshot_id } => {
-            println!("Reverting to snapshot {snapshot_id}...");
-            let workspace_root = std::env::current_dir()?;
-            let mgr = snapshot::GitSnapshot::new(&workspace_root);
-            let snap_id = snapshot::SnapshotId(snapshot_id.clone());
-            mgr.revert_to(&snap_id)?;
-            println!("Reverted to {snapshot_id}.");
         }
     }
 
@@ -353,7 +328,7 @@ fn prompt_api_key(provider: &str) -> Result<String> {
 
 pub async fn cmd_update_best_models(global: bool) -> Result<()> {
     let mut harness = crate::init_harness()?;
-    crate::cli::register_providers_from_env(&mut harness)?;
+    crate::run::register_providers_from_env(&mut harness)?;
 
     if harness.provider_registry.list().is_empty() {
         bail!("no provider configured. Run 'omh auth login' first.");

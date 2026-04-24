@@ -65,6 +65,10 @@ impl EvolutionEngine {
         Self { memory, policy }
     }
 
+    pub fn policy(&self) -> &EvolutionPolicy {
+        &self.policy
+    }
+
     pub fn learn_from_correction(&self, correction: Correction) -> Result<MemoryEntry> {
         let now = unix_timestamp()?;
         let entry = MemoryEntry {

@@ -10,7 +10,6 @@ pub const LLM_RESPONSE: &str = "llm_response";
 pub const AGENT_TURN: &str = "agent_turn";
 pub const SUBAGENT_SPAWN: &str = "subagent_spawn";
 pub const MEMORY_OP: &str = "memory_op";
-pub const SNAPSHOT_OP: &str = "snapshot_op";
 
 const OMH_CRATES: &[&str] = &[
     "omh",
@@ -23,7 +22,6 @@ const OMH_CRATES: &[&str] = &[
     "bus",
     "memory",
     "evolution",
-    "snapshot",
     "hook",
     "permission",
     "skill",
