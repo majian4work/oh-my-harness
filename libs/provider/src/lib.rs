@@ -1,6 +1,7 @@
 pub mod anthropic;
 pub mod copilot;
 pub mod mock;
+pub mod openai_common;
 pub mod openai_compat;
 
 use std::pin::Pin;
