@@ -1,5 +1,6 @@
 use agent::AgentRegistry;
 use async_trait::async_trait;
+use bus::{ApprovalChannel, ApprovalResponse};
 use permission::PermissionDecision;
 use tool::ToolRegistry;
 
@@ -12,13 +13,19 @@ use crate::{Hook, HookContext, HookPoint, HookResult};
 pub struct PermissionGuardHook {
     agent_registry: AgentRegistry,
     tool_registry: Arc<ToolRegistry>,
+    approval_channel: ApprovalChannel,
 }
 
 impl PermissionGuardHook {
-    pub fn new(agent_registry: AgentRegistry, tool_registry: Arc<ToolRegistry>) -> Self {
+    pub fn new(
+        agent_registry: AgentRegistry,
+        tool_registry: Arc<ToolRegistry>,
+        approval_channel: ApprovalChannel,
+    ) -> Self {
         Self {
             agent_registry,
             tool_registry,
+            approval_channel,
         }
     }
 }
@@ -64,14 +71,31 @@ impl Hook for PermissionGuardHook {
                 HookResult::Deny(reason)
             }
             PermissionDecision::Ask(reason) => {
-                // In non-interactive mode, treat Ask as Deny
                 tracing::info!(
                     tool = %tool_name,
                     agent = %ctx.agent_name,
                     reason = %reason,
-                    "permission guard: tool requires approval, denying"
+                    "permission guard: tool requires user approval"
                 );
-                HookResult::Deny(reason)
+                let response = self
+                    .approval_channel
+                    .request_approval(
+                        ctx.session_id.clone(),
+                        tool_name.clone(),
+                        input,
+                        reason.clone(),
+                    )
+                    .await;
+                match response {
+                    ApprovalResponse::Allow => {
+                        tracing::info!(tool = %tool_name, "user approved tool execution");
+                        HookResult::Continue
+                    }
+                    ApprovalResponse::Deny => {
+                        tracing::info!(tool = %tool_name, "user denied tool execution");
+                        HookResult::Deny(format!("User denied: {reason}"))
+                    }
+                }
             }
         }
     }
@@ -210,6 +234,7 @@ impl Hook for ErrorTrackerHook {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bus::ApprovalChannel;
     use permission::{PermissionPolicy, PermissionRule};
     use tool::PermissionLevel;
 
@@ -254,16 +279,24 @@ mod tests {
         let permissions_section = if deny_lines.is_empty() {
             String::new()
         } else {
-            format!("## Permissions\n{deny_lines}\n")
+            format!(
+                "permissions:\n{}",
+                policy
+                    .deny_rules
+                    .iter()
+                    .map(|r| format!("  deny: {}\n", r.tool_pattern))
+                    .collect::<String>()
+            )
         };
         let md = format!(
-            "# {agent_name}\n\n\
-             ## Config\n\
-             - mode: primary\n\
-             - cost: free\n\
-             - permission_level: {level}\n\n\
+            "---\n\
+             name: {agent_name}\n\
+             config:\n\
+             \x20 mode: primary\n\
+             \x20 cost: free\n\
+             \x20 permission_level: {level}\n\
              {permissions_section}\
-             ## System Prompt\n\
+             ---\n\
              test"
         );
         let dir =
@@ -278,7 +311,7 @@ mod tests {
     #[tokio::test]
     async fn permission_guard_allows_permitted_tool() {
         let reg = test_registry_with_policy("test-agent", PermissionPolicy::permissive());
-        let hook = PermissionGuardHook::new(reg, mock_tool_registry());
+        let hook = PermissionGuardHook::new(reg, mock_tool_registry(), ApprovalChannel::new());
         let mut ctx = HookContext::new("s1", "test-agent");
         ctx.tool_name = Some("bash".to_string());
         ctx.tool_input = Some(serde_json::json!({"command": "ls"}));
@@ -289,11 +322,23 @@ mod tests {
 
     #[tokio::test]
     async fn permission_guard_denies_read_only_for_bash() {
+        let channel = ApprovalChannel::new();
         let reg = test_registry_with_policy("ro-agent", PermissionPolicy::read_only());
-        let hook = PermissionGuardHook::new(reg, mock_tool_registry());
+        let hook = PermissionGuardHook::new(reg, mock_tool_registry(), channel.clone());
         let mut ctx = HookContext::new("s1", "ro-agent");
         ctx.tool_name = Some("bash".to_string());
         ctx.tool_input = Some(serde_json::json!({}));
+
+        // Spawn a responder that denies the approval request
+        tokio::spawn(async move {
+            loop {
+                if let Some(req) = channel.try_recv().await {
+                    let _ = req.respond.send(ApprovalResponse::Deny);
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        });
 
         let result = hook.execute(&mut ctx).await;
         assert!(matches!(result, HookResult::Deny(_)));
@@ -303,7 +348,7 @@ mod tests {
     async fn permission_guard_skips_unknown_agent() {
         let paths: Vec<std::path::PathBuf> = vec![];
         let reg = AgentRegistry::load_from_paths(paths).unwrap();
-        let hook = PermissionGuardHook::new(reg, mock_tool_registry());
+        let hook = PermissionGuardHook::new(reg, mock_tool_registry(), ApprovalChannel::new());
         let mut ctx = HookContext::new("s1", "nonexistent-agent");
         ctx.tool_name = Some("bash".to_string());
 

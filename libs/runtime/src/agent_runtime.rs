@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use bus::AgentEvent;
 use futures::StreamExt;
 use hook::{HookContext, HookPoint, HookResult};
@@ -30,8 +30,45 @@ pub struct AgentRuntime {
     pub current_turn: u32,
     pub model_override: Option<ModelSpec>,
     pub interactive: bool,
+    pub turn_routing: TurnRouting,
     pub shared_harness: Option<std::sync::Arc<Harness>>,
     logger: Option<SessionLogger>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TurnRouting {
+    explicit_agent_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DelegationPolicy {
+    Default,
+    LeafOnly,
+}
+
+impl TurnRouting {
+    pub fn direct(agent_name: impl Into<String>) -> Self {
+        Self {
+            explicit_agent_name: Some(agent_name.into()),
+        }
+    }
+
+    pub fn explicit_agent_name(&self) -> Option<&str> {
+        self.explicit_agent_name.as_deref()
+    }
+
+    fn effective_agent_name<'a>(&'a self, session_agent_name: &'a str) -> &'a str {
+        self.explicit_agent_name()
+            .unwrap_or(session_agent_name)
+    }
+
+    fn delegation_policy(&self) -> DelegationPolicy {
+        if self.explicit_agent_name.is_some() {
+            DelegationPolicy::LeafOnly
+        } else {
+            DelegationPolicy::Default
+        }
+    }
 }
 
 pub struct ToolCallRecord {
@@ -64,9 +101,15 @@ impl AgentRuntime {
             current_turn: 0,
             model_override: None,
             interactive: true,
+            turn_routing: TurnRouting::default(),
             shared_harness: None,
             logger: None,
         }
+    }
+
+    pub fn with_turn_routing(mut self, turn_routing: TurnRouting) -> Self {
+        self.turn_routing = turn_routing;
+        self
     }
 
     pub fn with_logger(mut self, harness: &Harness) -> Self {
@@ -222,17 +265,25 @@ impl AgentRuntime {
         let run_started_at = now_millis();
         let run_started = std::time::Instant::now();
         let start_turn = self.current_turn;
+        let executing_agent_name = self
+            .turn_routing
+            .effective_agent_name(&self.agent_name)
+            .to_string();
         let agent = harness
             .agent_registry
-            .get(&self.agent_name)
-            .with_context(|| format!("unknown agent: {}", self.agent_name))?;
+            .get(&executing_agent_name)
+            .with_context(|| format!("unknown agent: {executing_agent_name}"))?;
+        if self.turn_routing.explicit_agent_name().is_some() && !agent.is_explicitly_invocable() {
+            bail!("agent '{}' cannot be invoked explicitly", agent.name);
+        }
+        let delegation_policy = self.turn_routing.delegation_policy();
 
         let cost_hint = Some(agent_cost_to_tier(agent.cost));
 
         let override_spec = self.model_override.clone();
         let config_spec = harness
             .agent_overrides
-            .get(&self.agent_name)
+            .get(&executing_agent_name)
             .and_then(|ov| {
                 ov.model.as_ref().map(|m| ModelSpec {
                     model_id: m.clone(),
@@ -246,9 +297,9 @@ impl AgentRuntime {
         let requested_spec = override_spec.or(config_spec).or(agent_spec);
 
         tracing::trace!(
-            agent = %self.agent_name,
+            agent = %executing_agent_name,
             override_model = ?self.model_override.as_ref().map(|s| &s.model_id),
-            config_model = ?harness.agent_overrides.get(&self.agent_name).and_then(|ov| ov.model.as_ref()),
+            config_model = ?harness.agent_overrides.get(&executing_agent_name).and_then(|ov| ov.model.as_ref()),
             agent_model = ?agent.model.as_ref().map(|m| &m.model_id),
             final_requested = ?requested_spec.as_ref().map(|s| &s.model_id),
             cost_hint = ?cost_hint,
@@ -277,7 +328,7 @@ impl AgentRuntime {
         let dump_dir = harness.session_manager.dump_dir(&self.session_id);
 
         let memory_scopes = vec![
-            Scope::Agent(self.agent_name.clone()),
+            Scope::Agent(executing_agent_name.clone()),
             Scope::Project(session.workspace_root.to_string_lossy().into_owned()),
             Scope::Global,
         ];
@@ -343,7 +394,7 @@ impl AgentRuntime {
             session_id: self.session_id.clone(),
         });
         {
-            let mut hook_ctx = HookContext::new(&self.session_id, &self.agent_name);
+            let mut hook_ctx = HookContext::new(&self.session_id, &executing_agent_name);
             harness
                 .hook_runner
                 .run(HookPoint::OnTurnStart, &mut hook_ctx)
@@ -353,7 +404,7 @@ impl AgentRuntime {
             "turn_start",
             &format!(
                 "turn={} agent={} model={} provider={}",
-                self.current_turn, self.agent_name, model_id, provider_id
+                self.current_turn, executing_agent_name, model_id, provider_id
             ),
         );
 
@@ -393,10 +444,16 @@ impl AgentRuntime {
                 max_tokens: None,
             };
 
-            dump_turn(&dump_dir, &self.agent_name, self.current_turn, "request", &request);
+            dump_turn(
+                &dump_dir,
+                &executing_agent_name,
+                self.current_turn,
+                "request",
+                &request,
+            );
 
             {
-                let mut hook_ctx = HookContext::new(&self.session_id, &self.agent_name);
+                let mut hook_ctx = HookContext::new(&self.session_id, &executing_agent_name);
                 harness.hook_runner.run(HookPoint::PreLlmCall, &mut hook_ctx).await;
             }
 
@@ -411,7 +468,7 @@ impl AgentRuntime {
                         for attempt in 1..=MAX_RETRIES {
                             let delay = retry_delay(&err_msg, attempt);
                             tracing::warn!(
-                                agent = %self.agent_name,
+                                agent = %executing_agent_name,
                                 model = %model_id,
                                 attempt,
                                 delay_ms = delay.as_millis() as u64,
@@ -429,38 +486,58 @@ impl AgentRuntime {
                             None => return Err(last_err),
                         }
                     } else if err_msg.contains("not accessible") || err_msg.contains("not found") || err_msg.contains("not supported") {
-                        let tier = cost_hint.unwrap_or(ModelCostTier::Medium);
-                        let fallback_model = provider.model_for_tier(tier);
-                        let fallback_model = if fallback_model == model_id {
-                            match tier {
-                                ModelCostTier::High => provider.model_for_tier(ModelCostTier::Medium),
-                                ModelCostTier::Medium => provider.model_for_tier(ModelCostTier::Low),
-                                ModelCostTier::Low => {
+                        let mut current_tier = cost_hint.unwrap_or(ModelCostTier::Medium);
+                        let _last_fallback_err = e;
+                        loop {
+                            let model_to_try = provider.model_for_tier(current_tier);
+                            
+                            // Try current tier's model if it differs from the original
+                            if model_to_try != model_id {
+                                tracing::warn!(
+                                    agent = %executing_agent_name,
+                                    model = %model_id,
+                                    fallback = %model_to_try,
+                                    error = %err_msg,
+                                    "Model not accessible, falling back"
+                                );
+                                let mut retry_request = request.clone();
+                                retry_request.model = model_to_try.clone();
+                                match provider.stream(retry_request).await {
+                                    Ok(s) => break Ok(s),
+                                    Err(fallback_err) => {
+                                        let fallback_err_msg = fallback_err.to_string();
+                                        if fallback_err_msg.contains("not accessible") || fallback_err_msg.contains("not found") || fallback_err_msg.contains("not supported") {
+                                            // Continue to next tier
+                                        } else {
+                                            break Err(fallback_err);
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Move to next tier
+                            let next_tier = match current_tier {
+                                ModelCostTier::High => Some(ModelCostTier::Medium),
+                                ModelCostTier::Medium => Some(ModelCostTier::Low),
+                                ModelCostTier::Low => None,
+                            };
+                            
+                            match next_tier {
+                                Some(tier) => current_tier = tier,
+                                None => {
                                     tracing::error!(
-                                        agent = %self.agent_name,
+                                        agent = %executing_agent_name,
                                         model = %model_id,
                                         error = %err_msg,
                                         "No fallback model available"
                                     );
-                                    return Err(e);
+                                    break Err(anyhow::anyhow!("No fallback model available"));
                                 }
                             }
-                        } else {
-                            fallback_model
-                        };
-                        tracing::warn!(
-                            agent = %self.agent_name,
-                            model = %model_id,
-                            fallback = %fallback_model,
-                            error = %err_msg,
-                            "Model not accessible, falling back"
-                        );
-                        let mut retry_request = request.clone();
-                        retry_request.model = fallback_model;
-                        provider.stream(retry_request).await?
+                        }?
                     } else {
                         tracing::warn!(
-                            agent = %self.agent_name,
+                            agent = %executing_agent_name,
                             model = %model_id,
                             error = %err_msg,
                             "Non-retryable error"
@@ -511,7 +588,7 @@ impl AgentRuntime {
             }
 
             {
-                let mut hook_ctx = HookContext::new(&self.session_id, &self.agent_name);
+                let mut hook_ctx = HookContext::new(&self.session_id, &executing_agent_name);
                 harness.hook_runner.run(HookPoint::PostLlmCall, &mut hook_ctx).await;
             }
 
@@ -538,9 +615,15 @@ impl AgentRuntime {
                 created_at: now_millis(),
             };
             messages.push(assistant_msg.clone());
-            dump_turn(&dump_dir, &self.agent_name, self.current_turn, "response", &assistant_msg);
+            dump_turn(
+                &dump_dir,
+                &executing_agent_name,
+                self.current_turn,
+                "response",
+                &assistant_msg,
+            );
             tracing::info!(
-                agent = %self.agent_name,
+                agent = %executing_agent_name,
                 turn = self.current_turn,
                 parts = assistant_msg.parts.len(),
                 text_len = text_buffer.len(),
@@ -563,7 +646,7 @@ impl AgentRuntime {
                     serde_json::from_str(&tool_call.args).unwrap_or(serde_json::Value::Null);
 
                 {
-                    let mut hook_ctx = HookContext::new(&self.session_id, &self.agent_name);
+                    let mut hook_ctx = HookContext::new(&self.session_id, &executing_agent_name);
                     hook_ctx.tool_name = Some(tool_call.name.clone());
                     hook_ctx.tool_input = Some(input.clone());
                     if let HookResult::Deny(reason) = harness.hook_runner.run(HookPoint::PreToolUse, &mut hook_ctx).await {
@@ -581,7 +664,7 @@ impl AgentRuntime {
                 let ctx = ToolContext {
                     session_id: self.session_id.clone(),
                     message_id: assistant_msg.id.clone(),
-                    agent_name: self.agent_name.clone(),
+                    agent_name: executing_agent_name.clone(),
                     workspace_root: session.workspace_root.clone(),
                     session_dir: Some(dump_dir.clone()),
                     abort: CancellationToken::new(),
@@ -591,6 +674,8 @@ impl AgentRuntime {
                 let output = if tool_call.name == "spawn_agent" {
                     execute_spawn_agent(
                         &self.session_id,
+                        &executing_agent_name,
+                        delegation_policy,
                         &self.model_override,
                         &self.shared_harness,
                         harness,
@@ -652,7 +737,7 @@ impl AgentRuntime {
 
                 let tool_telemetry = ToolTelemetry {
                     session_id: self.session_id.clone(),
-                    agent_name: self.agent_name.clone(),
+                    agent_name: executing_agent_name.clone(),
                     turn: self.current_turn,
                     tool_call_id: tool_call.id.clone(),
                     tool_name: tool_call.name.clone(),
@@ -696,7 +781,7 @@ impl AgentRuntime {
                     }
                 }
                 {
-                    let mut hook_ctx = HookContext::new(&self.session_id, &self.agent_name);
+                    let mut hook_ctx = HookContext::new(&self.session_id, &executing_agent_name);
                     hook_ctx.tool_name = Some(tool_call.name.clone());
                     hook_ctx.tool_output = Some(content.clone());
                     if is_error {
@@ -718,21 +803,27 @@ impl AgentRuntime {
                 created_at: now_millis(),
             };
             messages.push(tool_result_msg.clone());
-            dump_turn(&dump_dir, &self.agent_name, self.current_turn, "tool_results", &tool_result_msg);
+            dump_turn(
+                &dump_dir,
+                &executing_agent_name,
+                self.current_turn,
+                "tool_results",
+                &tool_result_msg,
+            );
             harness
                 .session_manager
                 .append_message(&self.session_id, &tool_result_msg)?;
         }
 
         {
-            let mut hook_ctx = HookContext::new(&self.session_id, &self.agent_name);
+            let mut hook_ctx = HookContext::new(&self.session_id, &executing_agent_name);
             harness.hook_runner.run(HookPoint::OnTurnEnd, &mut hook_ctx).await;
         }
 
         // Evolution: extract learnings from the turn (best-effort)
         // Only extract when there was substantial work (>= 3 tool calls in a completed turn)
         if completed && total_tool_calls >= 3 {
-            let scope = Scope::Agent(self.agent_name.clone());
+            let scope = Scope::Agent(executing_agent_name.clone());
             let prepared = harness.evolution.prepare_extraction_request(&messages, &self.session_id, &scope);
             match provider.complete(prepared.request).await {
                 Ok(resp) => {
@@ -791,10 +882,16 @@ impl AgentRuntime {
         .await;
 
         let run_completed_at = now_millis();
+        let telemetry_session_primary = if executing_agent_name != self.agent_name {
+            Some(self.agent_name.clone())
+        } else {
+            None
+        };
         let telemetry = match &run_result {
             Ok(result) => TurnTelemetry {
                 session_id: self.session_id.clone(),
-                agent_name: self.agent_name.clone(),
+                agent_name: executing_agent_name.clone(),
+                session_primary_agent: telemetry_session_primary.clone(),
                 provider_id: provider_id.to_string(),
                 model_id: model_id.clone(),
                 started_at: run_started_at,
@@ -815,7 +912,8 @@ impl AgentRuntime {
             },
             Err(error) => TurnTelemetry {
                 session_id: self.session_id.clone(),
-                agent_name: self.agent_name.clone(),
+                agent_name: executing_agent_name.clone(),
+                session_primary_agent: telemetry_session_primary,
                 provider_id: provider_id.to_string(),
                 model_id: model_id.clone(),
                 started_at: run_started_at,
@@ -843,6 +941,8 @@ impl AgentRuntime {
 
 fn execute_spawn_agent<'a>(
     session_id: &'a str,
+    caller_agent_name: &'a str,
+    delegation_policy: DelegationPolicy,
     model_override: &'a Option<ModelSpec>,
     shared_harness: &'a Option<std::sync::Arc<Harness>>,
     harness: &'a Harness,
@@ -852,6 +952,12 @@ fn execute_spawn_agent<'a>(
     Box<dyn std::future::Future<Output = anyhow::Result<tool::ToolOutput>> + Send + 'a>,
 > {
     Box::pin(async move {
+        if matches!(delegation_policy, DelegationPolicy::LeafOnly) {
+            return Ok(tool::ToolOutput::error(format!(
+                "Explicit @agent turns are leaf-only. Agent '{caller_agent_name}' cannot delegate with spawn_agent in this turn."
+            )));
+        }
+
         let agent_name = input
             .get("agent_name")
             .and_then(|v| v.as_str())
@@ -870,6 +976,26 @@ fn execute_spawn_agent<'a>(
         if harness.agent_registry.get(&agent_name).is_none() {
             return Ok(tool::ToolOutput::error(format!(
                 "unknown agent: {agent_name}"
+            )));
+        }
+
+        if !harness
+            .agent_registry
+            .delegation_allowed(caller_agent_name, &agent_name)
+        {
+            let allowed_targets = harness
+                .agent_registry
+                .get(caller_agent_name)
+                .map(|agent| {
+                    if agent.can_delegate_to.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        agent.can_delegate_to.join(", ")
+                    }
+                })
+                .unwrap_or_else(|| "(unknown caller)".to_string());
+            return Ok(tool::ToolOutput::error(format!(
+                "Delegation policy denied: agent '{caller_agent_name}' cannot delegate to '{agent_name}'. Allowed targets: {allowed_targets}."
             )));
         }
 

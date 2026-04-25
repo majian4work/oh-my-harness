@@ -6,9 +6,34 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
+use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tool::{ToolContext, ToolHandler, ToolOutput, ToolRegistry, ToolSpec};
+use tool::{PermissionLevel, ToolContext, ToolHandler, ToolOutput, ToolRegistry, ToolSpec};
+
+/// Intermediate struct matching the MCP protocol's `Tool` object.
+/// MCP uses `inputSchema` (camelCase), and doesn't include omh-specific fields
+/// like `required_permission` or `supports_parallel`.
+#[derive(Debug, Clone, Deserialize)]
+struct McpToolDef {
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(rename = "inputSchema", default)]
+    input_schema: Option<Value>,
+}
+
+impl From<McpToolDef> for ToolSpec {
+    fn from(def: McpToolDef) -> Self {
+        Self {
+            name: def.name,
+            description: def.description.unwrap_or_default(),
+            input_schema: def.input_schema.unwrap_or(json!({"type": "object"})),
+            required_permission: PermissionLevel::ReadOnly,
+            supports_parallel: false,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum McpTransport {
@@ -32,13 +57,18 @@ pub struct McpClient {
 enum ConnectionState {
     Disconnected,
     Stdio(StdioConnection),
-    StreamableHttp,
+    StreamableHttp(HttpConnection),
 }
 
 struct StdioConnection {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+}
+
+struct HttpConnection {
+    client: reqwest::Client,
+    session_id: Option<String>,
 }
 
 impl Clone for McpClient {
@@ -82,14 +112,87 @@ impl McpClient {
                     stdout: BufReader::new(stdout),
                 })
             }
-            McpTransport::StreamableHttp { .. } => ConnectionState::StreamableHttp,
+            McpTransport::StreamableHttp { headers, .. } => {
+                let mut default_headers = HeaderMap::new();
+                default_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                default_headers.insert(
+                    ACCEPT,
+                    HeaderValue::from_static("application/json, text/event-stream"),
+                );
+                for (key, value) in headers {
+                    if let (Ok(name), Ok(val)) = (
+                        reqwest::header::HeaderName::from_bytes(key.as_bytes()),
+                        HeaderValue::from_str(value),
+                    ) {
+                        default_headers.insert(name, val);
+                    }
+                }
+                let client = reqwest::Client::builder()
+                    .default_headers(default_headers)
+                    .build()
+                    .context("failed to build HTTP client for MCP")?;
+                ConnectionState::StreamableHttp(HttpConnection {
+                    client,
+                    session_id: None,
+                })
+            }
         };
 
-        Ok(Self {
+        let me = Self {
             transport,
             state: Arc::new(Mutex::new(state)),
             next_id: Arc::new(AtomicU64::new(1)),
-        })
+        };
+
+        // Perform initialization handshake for StreamableHttp
+        if matches!(me.transport, McpTransport::StreamableHttp { .. }) {
+            me.initialize()?;
+        }
+
+        Ok(me)
+    }
+
+    /// MCP initialization handshake: send `initialize` request, then `initialized` notification.
+    fn initialize(&self) -> Result<()> {
+        let params = json!({
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "omh",
+                "version": env!("CARGO_PKG_VERSION")
+            }
+        });
+        // The initialize response may contain a session ID in the Mcp-Session-Id header.
+        // We handle that inside send_http_request by storing it in the connection state.
+        let _response = self.send_request("initialize", Some(params))?;
+
+        // Send `initialized` notification (no id field, no response expected)
+        if let McpTransport::StreamableHttp { uri, .. } = &self.transport {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| anyhow!("MCP client state lock poisoned"))?;
+            if let ConnectionState::StreamableHttp(conn) = &*state {
+                let notification = json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized"
+                });
+                let mut req = conn.client.post(uri).json(&notification);
+                if let Some(sid) = &conn.session_id {
+                    req = req.header("Mcp-Session-Id", sid.as_str());
+                }
+                let handle = tokio::runtime::Handle::current();
+                let client_req = req;
+                tokio::task::block_in_place(|| {
+                    handle.block_on(async {
+                        // Server should respond 202 Accepted for notifications
+                        let _ = client_req.send().await;
+                    })
+                });
+            }
+        }
+
+        Ok(())
     }
 
     pub fn list_tools(&self) -> Result<Vec<ToolSpec>> {
@@ -98,16 +201,20 @@ impl McpClient {
             .result
             .ok_or_else(|| anyhow!("missing result in tools/list response"))?;
 
-        match result {
-            Value::Array(_) => serde_json::from_value(result).context("invalid tools/list result"),
+        let raw_tools: Vec<McpToolDef> = match result {
+            Value::Array(_) => {
+                serde_json::from_value(result).context("invalid tools/list result")?
+            }
             Value::Object(mut object) => {
                 let tools = object
                     .remove("tools")
                     .ok_or_else(|| anyhow!("missing `tools` field in tools/list response"))?;
-                serde_json::from_value(tools).context("invalid tools/list response payload")
+                serde_json::from_value(tools).context("invalid tools/list response payload")?
             }
             _ => bail!("unexpected tools/list result payload"),
-        }
+        };
+
+        Ok(raw_tools.into_iter().map(ToolSpec::from).collect())
     }
 
     pub fn call_tool(&self, name: &str, input: Value) -> Result<ToolOutput> {
@@ -142,7 +249,25 @@ impl McpClient {
                 *state = ConnectionState::Disconnected;
                 Ok(())
             }
-            ConnectionState::StreamableHttp => {
+            ConnectionState::StreamableHttp(conn) => {
+                // Send DELETE to terminate the session if we have a session ID
+                if let (McpTransport::StreamableHttp { uri, .. }, Some(sid)) =
+                    (&self.transport, &conn.session_id)
+                {
+                    let client = conn.client.clone();
+                    let uri = uri.clone();
+                    let sid = sid.clone();
+                    let handle = tokio::runtime::Handle::current();
+                    tokio::task::block_in_place(|| {
+                        handle.block_on(async {
+                            let _ = client
+                                .delete(&uri)
+                                .header("Mcp-Session-Id", &sid)
+                                .send()
+                                .await;
+                        })
+                    });
+                }
                 *state = ConnectionState::Disconnected;
                 Ok(())
             }
@@ -167,7 +292,9 @@ impl McpClient {
                 let connection = match &mut *state {
                     ConnectionState::Stdio(connection) => connection,
                     ConnectionState::Disconnected => bail!("MCP client is disconnected"),
-                    ConnectionState::StreamableHttp => unreachable!("transport/state mismatch"),
+                    ConnectionState::StreamableHttp(_) => {
+                        unreachable!("transport/state mismatch")
+                    }
                 };
 
                 serde_json::to_writer(&mut connection.stdin, &request)
@@ -198,26 +325,32 @@ impl McpClient {
 
                 Ok(response)
             }
-            McpTransport::StreamableHttp { uri, headers } => {
-                self.send_http_request(&request, uri, headers)
-            }
+            McpTransport::StreamableHttp { uri, .. } => self.send_http_request(&request, uri),
         }
     }
 
-    fn send_http_request(
-        &self,
-        request: &JsonRpcRequest,
-        uri: &str,
-        headers: &HashMap<String, String>,
-    ) -> Result<JsonRpcResponse> {
-        let handle = tokio::runtime::Handle::current();
-        let client = reqwest::Client::new();
+    fn send_http_request(&self, request: &JsonRpcRequest, uri: &str) -> Result<JsonRpcResponse> {
+        let (client, session_id) = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| anyhow!("MCP client state lock poisoned"))?;
+            match &*state {
+                ConnectionState::StreamableHttp(conn) => {
+                    (conn.client.clone(), conn.session_id.clone())
+                }
+                ConnectionState::Disconnected => bail!("MCP client is disconnected"),
+                ConnectionState::Stdio(_) => unreachable!("transport/state mismatch"),
+            }
+        };
+
         let mut req = client.post(uri).json(request);
-        for (key, value) in headers {
-            req = req.header(key.as_str(), value.as_str());
+        if let Some(sid) = &session_id {
+            req = req.header("Mcp-Session-Id", sid.as_str());
         }
 
-        let response: JsonRpcResponse = tokio::task::block_in_place(|| {
+        let handle = tokio::runtime::Handle::current();
+        let (response, new_session_id) = tokio::task::block_in_place(|| {
             handle.block_on(async {
                 let resp = req.send().await.context("MCP HTTP request failed")?;
                 let status = resp.status();
@@ -225,11 +358,46 @@ impl McpClient {
                     let body = resp.text().await.unwrap_or_default();
                     bail!("MCP HTTP error {status}: {body}");
                 }
-                resp.json::<JsonRpcResponse>()
-                    .await
-                    .context("failed to parse MCP HTTP response")
+
+                // Capture Mcp-Session-Id from response headers
+                let new_sid = resp
+                    .headers()
+                    .get("mcp-session-id")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+
+                let content_type = resp
+                    .headers()
+                    .get(CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+
+                if content_type.contains("text/event-stream") {
+                    // Parse SSE stream — collect events until we get the JSON-RPC response
+                    let body = resp.text().await.context("failed to read SSE body")?;
+                    let rpc_response = parse_sse_response(&body, request.id)?;
+                    Ok((rpc_response, new_sid))
+                } else {
+                    let rpc_response: JsonRpcResponse = resp
+                        .json()
+                        .await
+                        .context("failed to parse MCP HTTP response")?;
+                    Ok((rpc_response, new_sid))
+                }
             })
         })?;
+
+        // Store new session ID if received
+        if let Some(sid) = new_session_id {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| anyhow!("MCP client state lock poisoned"))?;
+            if let ConnectionState::StreamableHttp(conn) = &mut *state {
+                conn.session_id = Some(sid);
+            }
+        }
 
         if response.jsonrpc != "2.0" {
             bail!("unexpected JSON-RPC version `{}`", response.jsonrpc);
@@ -292,11 +460,33 @@ fn read_json_rpc_response(stdout: &mut BufReader<ChildStdout>) -> Result<JsonRpc
     }
 }
 
+/// Parse an SSE body to extract the JSON-RPC response matching the given request id.
+/// SSE format: lines starting with "data: " contain JSON payloads, blank lines delimit events.
+fn parse_sse_response(body: &str, expected_id: u64) -> Result<JsonRpcResponse> {
+    for line in body.lines() {
+        let line = line.trim();
+        if let Some(data) = line.strip_prefix("data:") {
+            let data = data.trim();
+            if data.is_empty() {
+                continue;
+            }
+            // Try to parse as JSON-RPC response
+            if let Ok(response) = serde_json::from_str::<JsonRpcResponse>(data) {
+                if response.id == expected_id {
+                    return Ok(response);
+                }
+            }
+        }
+    }
+    bail!("no JSON-RPC response with id {expected_id} found in SSE stream")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct JsonRpcRequest {
     jsonrpc: String,
     id: u64,
     method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     params: Option<Value>,
 }
 
@@ -402,6 +592,24 @@ mod tests {
     }
 
     #[test]
+    fn json_rpc_request_omits_params_when_none() {
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: 2,
+            method: "tools/list".to_string(),
+            params: None,
+        };
+
+        let serialized = serde_json::to_string(&request).unwrap();
+        // Must NOT contain "params" key at all — some MCP servers reject "params": null
+        assert!(!serialized.contains("params"), "serialized: {serialized}");
+
+        // Round-trip still works
+        let deserialized: JsonRpcRequest = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, request);
+    }
+
+    #[test]
     fn mcp_transport_serialization_round_trip() {
         let transport = McpTransport::Stdio {
             command: "server".to_string(),
@@ -432,5 +640,68 @@ mod tests {
         };
 
         let _ = McpClient::connect(transport);
+    }
+
+    #[test]
+    fn parse_sse_response_extracts_matching_id() {
+        let body =
+            "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"tools\":[]}}\n\n";
+        let response = parse_sse_response(body, 3).unwrap();
+        assert_eq!(response.id, 3);
+        assert!(response.result.is_some());
+    }
+
+    #[test]
+    fn parse_sse_response_skips_non_matching_events() {
+        let body = "\
+data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n\
+data: {\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"ok\":true}}\n\n";
+        let response = parse_sse_response(body, 5).unwrap();
+        assert_eq!(response.id, 5);
+    }
+
+    #[test]
+    fn parse_sse_response_fails_when_id_not_found() {
+        let body = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n";
+        assert!(parse_sse_response(body, 99).is_err());
+    }
+
+    #[test]
+    fn mcp_tool_def_deserializes_from_protocol_json() {
+        // Real MCP protocol format: camelCase `inputSchema`, no omh-specific fields
+        let json = json!({
+            "name": "search",
+            "description": "Search the web",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
+            }
+        });
+
+        let def: McpToolDef = serde_json::from_value(json).unwrap();
+        assert_eq!(def.name, "search");
+        assert_eq!(def.description.as_deref(), Some("Search the web"));
+        assert!(def.input_schema.is_some());
+
+        let spec = ToolSpec::from(def);
+        assert_eq!(spec.name, "search");
+        assert_eq!(spec.required_permission, PermissionLevel::ReadOnly);
+        assert!(!spec.supports_parallel);
+        assert!(spec.input_schema["properties"]["query"].is_object());
+    }
+
+    #[test]
+    fn mcp_tool_def_handles_minimal_fields() {
+        // Some MCP servers return tools with no description or inputSchema
+        let json = json!({ "name": "ping" });
+
+        let def: McpToolDef = serde_json::from_value(json).unwrap();
+        let spec = ToolSpec::from(def);
+        assert_eq!(spec.name, "ping");
+        assert_eq!(spec.description, "");
+        assert_eq!(spec.input_schema, json!({"type": "object"}));
     }
 }

@@ -24,7 +24,14 @@ pub enum ErrorCategory {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TurnTelemetry {
     pub session_id: String,
+    /// The agent that actually executed this turn. When explicit `@agent` routing is active,
+    /// this is the explicitly routed agent; otherwise it equals the session primary agent.
     pub agent_name: String,
+    /// The session primary agent at the time of this turn. Populated only when explicit
+    /// `@agent` routing caused a different agent to execute (i.e. `agent_name` differs from
+    /// the session primary agent). `None` means the executing agent was the session primary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_primary_agent: Option<String>,
     pub provider_id: String,
     pub model_id: String,
     pub started_at: i64,
@@ -309,6 +316,7 @@ mod tests {
         let record = TurnTelemetry {
             session_id: "ses_1".into(),
             agent_name: "worker".into(),
+            session_primary_agent: None,
             provider_id: "mock".into(),
             model_id: "mock-model".into(),
             started_at: 10,
@@ -337,6 +345,7 @@ mod tests {
             TurnTelemetry {
                 session_id: "ses_1".into(),
                 agent_name: "worker".into(),
+                session_primary_agent: None,
                 provider_id: "mock".into(),
                 model_id: "m1".into(),
                 started_at: 10,
@@ -354,6 +363,7 @@ mod tests {
             TurnTelemetry {
                 session_id: "ses_1".into(),
                 agent_name: "worker".into(),
+                session_primary_agent: None,
                 provider_id: "mock".into(),
                 model_id: "m1".into(),
                 started_at: 30,

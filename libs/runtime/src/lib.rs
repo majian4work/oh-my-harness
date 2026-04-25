@@ -5,7 +5,7 @@ pub mod session_logger;
 pub mod spawn_tool;
 pub mod telemetry;
 
-pub use agent_runtime::{AgentRuntime, TurnResult};
+pub use agent_runtime::{AgentRuntime, TurnResult, TurnRouting};
 pub use background::{BackgroundTaskManager, TaskHandle, TaskId, TaskStatus};
 pub use harness::Harness;
 pub use session_logger::SessionLogger;

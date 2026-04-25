@@ -228,7 +228,9 @@ shellcheck*/
 .devcontainer.runtime.env
 /justfile
 /test_summary.md
+tests/evals/reports
 
 # Local state
 .omh/
 .opencode/
+.sisyphus/

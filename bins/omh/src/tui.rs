@@ -67,6 +67,11 @@ fn compact_tool_args(args_json: &str) -> String {
     parts.join(" ")
 }
 
+pub(crate) mod input_ast;
+mod input_intent;
+mod mention_parser;
+mod slash_input;
+
 mod palette {
     use ratatui::style::Color;
 
@@ -184,6 +189,7 @@ struct App {
     msg_scroll: u16,              // cached scroll value used during last render
     msg_max_scroll: u16,
     loading_models: bool,
+    pending_approval: Option<bus::ApprovalRequest>,
 }
 
 impl App {
@@ -240,6 +246,7 @@ impl App {
             msg_scroll: 0,
             msg_max_scroll: 0,
             loading_models: false,
+            pending_approval: None,
         };
         app.refresh_status();
         Ok(app)
@@ -650,6 +657,72 @@ impl App {
                 .style(Style::default().bg(palette::SURFACE).fg(palette::FG)),
             popup_area,
         );
+    }
+
+    fn render_approval_prompt(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        approval: &bus::ApprovalRequest,
+    ) {
+        let tool = &approval.tool;
+        let reason = &approval.reason;
+
+        // Format input args compactly
+        let args_display = compact_tool_args(&approval.input.to_string());
+        let args_line = if args_display.is_empty() {
+            String::new()
+        } else {
+            format!("  args: {args_display}")
+        };
+
+        let mut lines = vec![
+            Line::from(Span::styled(
+                format!(" ⚠ Tool requires approval: {tool} "),
+                Style::default().fg(palette::YELLOW),
+            )),
+            Line::from(Span::styled(
+                format!("  reason: {reason}"),
+                Style::default().fg(palette::FG),
+            )),
+        ];
+        if !args_line.is_empty() {
+            lines.push(Line::from(Span::styled(
+                args_line,
+                Style::default().fg(palette::MUTED),
+            )));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  Press ", Style::default().fg(palette::MUTED)),
+            Span::styled("y", Style::default().fg(palette::GREEN)),
+            Span::styled(" to approve, ", Style::default().fg(palette::MUTED)),
+            Span::styled("any other key", Style::default().fg(palette::RED)),
+            Span::styled(" to deny", Style::default().fg(palette::MUTED)),
+        ]));
+
+        let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(4));
+        let width = 60.min(area.width.saturating_sub(4));
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+
+        let popup = Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+
+        let block = Block::default()
+            .title(" Approval Required ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(palette::YELLOW))
+            .style(Style::default().bg(palette::BG));
+        let inner = block.inner(popup);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(block, popup);
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     }
 
     fn refresh_status(&mut self) {
@@ -1250,6 +1323,27 @@ impl App {
             return None;
         }
 
+        // Handle pending approval prompt — y/n/Esc
+        if let Some(approval) = self.pending_approval.take() {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    let tool_name = approval.tool.clone();
+                    let _ = approval.respond.send(bus::ApprovalResponse::Allow);
+                    self.messages.push(ChatMessage::new(
+                        "system",
+                        format!("✓ Approved: {tool_name}"),
+                    ));
+                }
+                _ => {
+                    let tool_name = approval.tool.clone();
+                    let _ = approval.respond.send(bus::ApprovalResponse::Deny);
+                    self.messages
+                        .push(ChatMessage::new("system", format!("✗ Denied: {tool_name}")));
+                }
+            }
+            return None;
+        }
+
         if let Some(ref mut state) = self.suggestions {
             match key.code {
                 KeyCode::Up => {
@@ -1317,7 +1411,7 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Esc => {
+            KeyCode::Char('d') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
                 self.should_quit = true;
             }
             KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
@@ -1335,22 +1429,46 @@ impl App {
                     self.cursor_position = 0;
 
                     let workspace_root = std::env::current_dir().unwrap_or_default();
-                    match slash::dispatch(&text, &workspace_root) {
-                        Ok(SlashResult::Response(response)) => {
-                            self.messages.push(ChatMessage::new("user", text));
-                            self.messages.push(ChatMessage::new("system", response));
-                            self.refresh_status();
+                    if let Some(invocation) = slash_input::parse_slash_invocation(&text) {
+                        match slash::dispatch(&invocation, &workspace_root) {
+                            Ok(SlashResult::Response(response)) => {
+                                self.messages.push(ChatMessage::new("user", text));
+                                self.messages.push(ChatMessage::new("system", response));
+                                self.refresh_status();
+                            }
+                            Ok(SlashResult::Notify(msg)) => {
+                                self.messages.push(ChatMessage::new("system", msg));
+                            }
+                            Ok(SlashResult::ListModels { force_refresh }) => {
+                                return Some(AppAction::LoadModels { force_refresh });
+                            }
+                            Ok(SlashResult::ListAgents) => {
+                                // List primary agents in message panel
+                                if let Some(harness) = &self.harness {
+                                    let agents = harness.agent_registry.primary_switchable_agents();
+                                    let list = agents
+                                        .iter()
+                                        .map(|a| format!("  {}: {}", a.name, a.description))
+                                        .collect::<Vec<_>>()
+                                        .join("\n");
+                                    self.messages.push(ChatMessage::new(
+                                        "system",
+                                        format!("Available agents:\n{list}"),
+                                    ));
+                                }
+                            }
+                            Ok(SlashResult::ListNotifications) => {
+                                // Placeholder — notifications not yet in this branch
+                                self.messages
+                                    .push(ChatMessage::new("system", "No notifications."));
+                            }
+                            Err(e) => {
+                                self.messages
+                                    .push(ChatMessage::new("system", format!("Error: {e}")));
+                            }
                         }
-                        Ok(SlashResult::ListModels { force_refresh }) => {
-                            return Some(AppAction::LoadModels { force_refresh });
-                        }
-                        Ok(SlashResult::NotACommand) => {
-                            self.start_agent_turn(text);
-                        }
-                        Err(e) => {
-                            self.messages
-                                .push(ChatMessage::new("system", format!("Error: {e}")));
-                        }
+                    } else {
+                        self.start_agent_turn(text);
                     }
                     self.scroll_offset = 0;
                 }
@@ -1991,15 +2109,27 @@ impl App {
         let hints = Line::from(vec![
             Span::styled(" ^Y", Style::default().fg(palette::ACCENT)),
             Span::styled("copy ", Style::default().fg(palette::MUTED)),
-            Span::styled("Esc", Style::default().fg(palette::ACCENT)),
+            Span::styled("^D", Style::default().fg(palette::ACCENT)),
             Span::styled("quit ", Style::default().fg(palette::MUTED)),
         ]);
+
+        // Build footer left title: agent │ provider/model
+        let agent_label = format!(" 🤖 {} ", DEFAULT_AGENT);
+        let model_label = format!("{}/{} ", self.provider_id, self.model_id);
+        let sep = "│ ";
+        let footer_title = Line::from(vec![
+            Span::styled(agent_label, Style::default().fg(palette::CYAN)),
+            Span::styled(sep, Style::default().fg(palette::BORDER)),
+            Span::styled(model_label, Style::default().fg(palette::MUTED)),
+        ]);
+
         let input_widget = Paragraph::new(input_display.as_str())
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(input_border_color))
+                    .title_top(footer_title)
                     .title_bottom(hints.alignment(Alignment::Right)),
             )
             .style(Style::default().bg(palette::BG).fg(palette::FG));
@@ -2008,6 +2138,11 @@ impl App {
 
         if self.suggestions.is_some() {
             self.render_suggestions(frame, input_area);
+        }
+
+        // Approval prompt overlay
+        if let Some(ref approval) = self.pending_approval {
+            self.render_approval_prompt(frame, messages_area, approval);
         }
 
         if let Some((cursor_x, cursor_y)) = self.cursor_position(input_area) {
@@ -2313,6 +2448,18 @@ fn resolve_active_model(harness: &runtime::Harness) -> (String, String) {
 }
 
 pub async fn run_tui(continue_last: bool, resume_pick: bool) -> Result<()> {
+    // Restore terminal on panic so it doesn't leave raw mode / mouse capture on.
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            crossterm::event::DisableMouseCapture
+        );
+        original_hook(info);
+    }));
+
     let mut terminal = init_terminal()?;
     let mut app = App::new()?;
 
@@ -2393,6 +2540,21 @@ pub async fn run_tui(continue_last: bool, resume_pick: bool) -> Result<()> {
             } => {
                 if let Some(agent_event) = event {
                     app.handle_agent_event(agent_event);
+                }
+            }
+            approval = async {
+                if app.pending_approval.is_some() {
+                    // Already have one pending, don't poll more
+                    pending::<Option<bus::ApprovalRequest>>().await
+                } else if let Some(ref harness) = app.harness {
+                    harness.approval_channel.recv().await
+                } else {
+                    pending::<Option<bus::ApprovalRequest>>().await
+                }
+            } => {
+                if let Some(req) = approval {
+                    app.pending_approval = Some(req);
+                    app.scroll_offset = 0;
                 }
             }
         }

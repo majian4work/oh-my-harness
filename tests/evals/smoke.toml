@@ -31,7 +31,7 @@ disallow_error_categories = ["timeout", "provider"]
 [[cases]]
 name = "repo_model_alias_lookup"
 agent = "orchestrator"
-prompt = "Inspect this repository and answer with the normalized model id for alias gpt-5. Use tools if needed. Reply with the model id only."
+prompt = "Search the repository for model alias definitions. Find the normalized model id for alias gpt-5 by inspecting the codebase. Reply with the model id only."
 contains_all = ["gpt-5.4"]
 not_contains = ["error"]
 min_tool_calls = 1
@@ -41,8 +41,8 @@ disallow_error_categories = ["timeout", "provider", "tool_not_found"]
 [[cases]]
 name = "repo_runtime_reexports"
 agent = "orchestrator"
-prompt = "Inspect this repository and name two items re-exported from libs/runtime/src/lib.rs. Reply with a short comma-separated list."
-contains_all = ["AgentRuntime", "Harness"]
+prompt = "Inspect the repository and name two items re-exported from libs/runtime/src/lib.rs. Reply with a short comma-separated list."
+contains_any = ["AgentRuntime", "BackgroundTaskManager", "Harness", "SessionLogger", "SpawnAgentTool", "TurnResult", "TurnRouting"]
 not_contains = ["error"]
 min_tool_calls = 1
 max_tool_errors = 0

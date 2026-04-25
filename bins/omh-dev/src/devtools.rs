@@ -438,6 +438,7 @@ fn evaluate_case(
     tool_records: &[runtime::ToolTelemetry],
 ) -> EvalCaseResult {
     let response = result.map(|r| r.response.clone()).unwrap_or_default();
+    let response_lower = response.to_lowercase();
     let completed = result.map(|r| r.completed).unwrap_or(false);
     let tool_calls = result
         .map(|r| r.tool_calls_made)
@@ -471,7 +472,7 @@ fn evaluate_case(
     }
 
     for needle in &case.contains_all {
-        if !response.contains(needle) {
+        if !response_lower.contains(&needle.to_lowercase()) {
             failures.push(format!("response missing required text: {needle}"));
         }
     }
@@ -480,7 +481,7 @@ fn evaluate_case(
         && !case
             .contains_any
             .iter()
-            .any(|needle| response.contains(needle))
+            .any(|needle| response_lower.contains(&needle.to_lowercase()))
     {
         failures.push(format!(
             "response did not contain any of the expected strings: {}",
@@ -489,7 +490,7 @@ fn evaluate_case(
     }
 
     for needle in &case.not_contains {
-        if response.contains(needle) {
+        if response_lower.contains(&needle.to_lowercase()) {
             failures.push(format!("response contained forbidden text: {needle}"));
         }
     }
@@ -855,6 +856,7 @@ mod tests {
         let turn = runtime::TurnTelemetry {
             session_id: "ses_1".into(),
             agent_name: "orchestrator".into(),
+            session_primary_agent: None,
             provider_id: "mock".into(),
             model_id: "mock-model".into(),
             started_at: 1,

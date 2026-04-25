@@ -348,6 +348,20 @@ impl SessionManager {
         Ok(())
     }
 
+    pub fn update_agent_name(&self, id: &str, agent_name: &str) -> Result<()> {
+        let path = self.session_path(id);
+        let content = fs::read_to_string(&path)?;
+        let mut lines: Vec<String> = content.lines().map(|line| line.to_owned()).collect();
+        if lines.is_empty() {
+            bail!("empty session file");
+        }
+        let mut header: SessionHeader = serde_json::from_str(&lines[0])?;
+        header.agent_name = agent_name.into();
+        lines[0] = serde_json::to_string(&header)?;
+        fs::write(&path, lines.join("\n") + "\n")?;
+        Ok(())
+    }
+
     pub fn restore(&self, session: Session) -> Result<()> {
         let header = SessionHeader {
             id: session.id.clone(),
@@ -436,6 +450,18 @@ mod tests {
         let loaded = mgr.get(&session.id).unwrap();
         assert_eq!(loaded.input_tokens, 123);
         assert_eq!(loaded.output_tokens, 456);
+    }
+
+    #[test]
+    fn update_agent_name_persists_to_session_header() {
+        let dir = tempdir();
+        let mgr = SessionManager::new(&dir).unwrap();
+        let session = mgr.create("build", "gpt-4o", Path::new("/tmp")).unwrap();
+
+        mgr.update_agent_name(&session.id, "planner").unwrap();
+
+        let loaded = mgr.get(&session.id).unwrap();
+        assert_eq!(loaded.agent_name, "planner");
     }
 
     #[test]

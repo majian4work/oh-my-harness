@@ -95,64 +95,73 @@ headers = { Authorization = "Bearer ..." }
 
 Custom agents are defined as Markdown files in `.omh/agents/` (project) or `~/.config/omh/agents/` (global).
 
+All metadata lives in the YAML front matter. The Markdown body after the closing `---` is used verbatim as the agent's **system prompt**.
+
 ```markdown
-# my-agent
-
-Short description of the agent.
-
-## Config
-
-- Mode: subagent
-- Cost: cheap
-- Model: gpt-4.1
-- Provider: openai
-- MaxTurns: 10
-- Temperature: 0.7
-- PermissionLevel: workspace_write
-
-## Permissions
-
-- Allow: read, glob, grep
-- Deny: bash
-- Ask: write, edit
-
-## Use When
-
-- Task requires specialized domain knowledge
-- User explicitly requests this agent
-
-## Avoid When
-
-- Simple tasks that don't need specialization
-
-## Triggers
-
-- "analyze performance": Performance analysis requested
-
-## System Prompt
-
+---
+name: my-agent
+description: Short description telling the orchestrator when to delegate here
+user_invocable: true
+can_delegate_to: []
+config:
+  mode: subagent
+  cost: cheap
+  model: gpt-4.1
+  provider: openai
+  max_turns: 10
+  temperature: 0.7
+  permission_level: WorkspaceWrite
+permissions:
+  allow: read_file, glob, grep
+  deny: bash
+  ask: write_file, edit_file
+use_when:
+  - Task requires specialized domain knowledge
+  - User explicitly requests this agent
+avoid_when:
+  - Simple tasks that don't need specialization
+triggers:
+  analyze-performance: Performance analysis requested
+---
 You are a specialized agent that...
 ```
 
-**Config keys:**
+**Front matter fields:**
 
-| Key               | Values                                        | Default     | Description                                        |
-| ----------------- | --------------------------------------------- | ----------- | -------------------------------------------------- |
-| `Mode`            | `primary`, `subagent`                         | `subagent`  | Primary agents handle top-level input              |
-| `Cost`            | `free`, `cheap`, `expensive`                  | `cheap`     | Influences model selection when no model specified |
-| `Model`           | model ID string                               | —           | Specific model to use                              |
-| `Provider`        | provider ID string                            | —           | Specific provider to use                           |
-| `MaxTurns`        | integer                                       | —           | Maximum tool-call loops per turn                   |
-| `Temperature`     | float (0.0–2.0)                               | —           | LLM sampling temperature                           |
-| `PermissionLevel` | `read_only`, `workspace_write`, `full_access` | `read_only` | Default tool permission level                      |
+| Key               | Type     | Default          | Description                                            |
+| ----------------- | -------- | ---------------- | ------------------------------------------------------ |
+| `name`            | string   | *(required)*     | Agent name (used for delegation and invocation)        |
+| `description`     | string   | `Agent '<name>'` | Short description for the orchestrator's routing table |
+| `user_invocable`  | bool     | `true`           | Whether users can invoke this agent directly           |
+| `can_delegate_to` | string[] | `[]`             | Names of agents this agent may delegate work to        |
 
-**Permission keys:**
+**Config keys** (nested under `config:`):
+
+| Key                | Values                                     | Default    | Description                                        |
+| ------------------ | ------------------------------------------ | ---------- | -------------------------------------------------- |
+| `mode`             | `primary`, `subagent`                      | `subagent` | Primary agents handle top-level input              |
+| `cost`             | `free`, `cheap`, `expensive`               | `cheap`    | Influences model selection when no model specified |
+| `model`            | model ID string                            | —          | Specific model to use                              |
+| `provider`         | provider ID string                         | —          | Specific provider to use                           |
+| `max_turns`        | integer                                    | —          | Maximum tool-call loops per turn                   |
+| `temperature`      | float (0.0–2.0)                            | —          | LLM sampling temperature                           |
+| `permission_level` | `ReadOnly`, `WorkspaceWrite`, `FullAccess` | `ReadOnly` | Default tool permission level                      |
+
+**Permission keys** (nested under `permissions:`):
 
 | Key     | Description                                        |
 | ------- | -------------------------------------------------- |
-| `Allow` | Comma-separated tool names always allowed          |
-| `Deny`  | Comma-separated tool names always denied           |
-| `Ask`   | Comma-separated tool names requiring user approval |
+| `allow` | Comma-separated tool names always allowed          |
+| `deny`  | Comma-separated tool names always denied           |
+| `ask`   | Comma-separated tool names requiring user approval |
+
+**Routing metadata** (used by orchestrator to choose subagents):
+
+| Key          | Type                   | Description                                       |
+| ------------ | ---------------------- | ------------------------------------------------- |
+| `use_when`   | string[]               | Scenarios where this agent should be delegated to |
+| `avoid_when` | string[]               | Scenarios where this agent is a poor fit          |
+| `triggers`   | map (keyword: meaning) | Keyword triggers the orchestrator can match on    |
 
 ## Skill Definitions (Markdown)
 

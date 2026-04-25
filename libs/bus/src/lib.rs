@@ -3,8 +3,10 @@
 //! Uses `tokio::sync::broadcast` for pub/sub event distribution.
 //! All frontends (TUI, CLI, Web) subscribe to the same bus.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex, broadcast, mpsc};
 
 /// Events emitted during agent operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +95,81 @@ pub enum AgentEvent {
         session_id: Option<String>,
         message: String,
     },
+}
+
+/// A tool approval request sent from the runtime to the UI.
+/// The runtime blocks on the `respond` oneshot until the user decides.
+pub struct ApprovalRequest {
+    pub session_id: String,
+    pub tool: String,
+    pub input: serde_json::Value,
+    pub reason: String,
+    pub respond: tokio::sync::oneshot::Sender<ApprovalResponse>,
+}
+
+/// User's response to a tool approval request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApprovalResponse {
+    Allow,
+    Deny,
+}
+
+/// Channel for tool approval requests.
+/// The runtime sends requests; the UI receives and responds.
+#[derive(Clone)]
+pub struct ApprovalChannel {
+    sender: mpsc::Sender<ApprovalRequest>,
+    receiver: Arc<Mutex<mpsc::Receiver<ApprovalRequest>>>,
+}
+
+impl ApprovalChannel {
+    pub fn new() -> Self {
+        let (sender, receiver) = mpsc::channel(16);
+        Self {
+            sender,
+            receiver: Arc::new(Mutex::new(receiver)),
+        }
+    }
+
+    /// Send an approval request and wait for the user's response.
+    pub async fn request_approval(
+        &self,
+        session_id: String,
+        tool: String,
+        input: serde_json::Value,
+        reason: String,
+    ) -> ApprovalResponse {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let req = ApprovalRequest {
+            session_id,
+            tool,
+            input,
+            reason,
+            respond: tx,
+        };
+        if self.sender.send(req).await.is_err() {
+            return ApprovalResponse::Deny;
+        }
+        rx.await.unwrap_or(ApprovalResponse::Deny)
+    }
+
+    /// Try to receive a pending approval request (non-blocking).
+    pub async fn try_recv(&self) -> Option<ApprovalRequest> {
+        let mut rx = self.receiver.lock().await;
+        rx.try_recv().ok()
+    }
+
+    /// Receive a pending approval request, waiting until one arrives.
+    pub async fn recv(&self) -> Option<ApprovalRequest> {
+        let mut rx = self.receiver.lock().await;
+        rx.recv().await
+    }
+}
+
+impl Default for ApprovalChannel {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Broadcast-based event bus.

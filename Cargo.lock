@@ -785,6 +785,7 @@ dependencies = [
  "agent",
  "anyhow",
  "async-trait",
+ "bus",
  "message",
  "permission",
  "serde",

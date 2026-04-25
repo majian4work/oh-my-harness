@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use agent::AgentRegistry;
 use anyhow::Result;
-use bus::{AgentEvent, EventBus, McpServerStatus};
+use bus::{AgentEvent, ApprovalChannel, EventBus, McpServerStatus};
 use evolution::{EvolutionEngine, EvolutionPolicy};
 use hook::HookRunner;
 use hook::builtins::{AuditTrailHook, ErrorTrackerHook, PermissionGuardHook};
@@ -67,6 +67,7 @@ pub struct Harness {
     pub mcp_bridge: Mutex<McpToolBridge>,
     pub mcp_statuses: Mutex<Vec<McpServerStatus>>,
     pub agent_overrides: HashMap<String, AgentOverride>,
+    pub approval_channel: ApprovalChannel,
 }
 
 impl Harness {
@@ -101,10 +102,13 @@ impl Harness {
 
         let agent_overrides = Self::load_agent_overrides(workspace_root);
 
+        let approval_channel = ApprovalChannel::new();
+
         let mut hook_runner = HookRunner::new();
         hook_runner.register(Box::new(PermissionGuardHook::new(
             agent_registry.clone(),
             Arc::clone(&tool_registry),
+            approval_channel.clone(),
         )));
         hook_runner.register(Box::new(ErrorTrackerHook::new(5)));
         for audit_hook in AuditTrailHook::all() {
@@ -125,6 +129,7 @@ impl Harness {
             mcp_bridge,
             mcp_statuses,
             agent_overrides,
+            approval_channel,
         })
     }
 
@@ -298,7 +303,10 @@ impl Harness {
                             }
                             tools.len()
                         }
-                        Err(_) => 0,
+                        Err(e) => {
+                            tracing::warn!("MCP server '{}' list_tools failed: {}", name, e);
+                            0
+                        }
                     };
                     bridge.add_client(client);
                     statuses.push(McpServerStatus {

@@ -28,6 +28,28 @@ pub struct AgentMetadata {
     pub triggers: Vec<(String, String)>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+struct AgentFrontMatter {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default = "default_user_invocable")]
+    user_invocable: bool,
+    #[serde(default)]
+    can_delegate_to: Vec<String>,
+    #[serde(default)]
+    config: Vec<(String, String)>,
+    #[serde(default)]
+    use_when: Vec<String>,
+    #[serde(default)]
+    avoid_when: Vec<String>,
+    #[serde(default)]
+    triggers: Vec<(String, String)>,
+    #[serde(default)]
+    permissions: Vec<(String, String)>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentSource {
     Builtin,
@@ -46,6 +68,10 @@ pub struct AgentDefinition {
     pub description: String,
     pub mode: AgentMode,
     pub cost: AgentCost,
+    #[serde(default = "default_user_invocable")]
+    pub user_invocable: bool,
+    #[serde(default)]
+    pub can_delegate_to: Vec<String>,
     pub system_prompt: String,
     pub model: Option<ModelSpec>,
     pub permission_rules: PermissionPolicy,
@@ -53,6 +79,20 @@ pub struct AgentDefinition {
     pub temperature: Option<f32>,
     pub metadata: AgentMetadata,
     pub source: AgentSource,
+}
+
+impl AgentDefinition {
+    pub fn is_primary_switchable(&self) -> bool {
+        self.mode == AgentMode::Primary
+    }
+
+    pub fn is_explicitly_invocable(&self) -> bool {
+        self.user_invocable
+    }
+
+    pub fn allows_delegation_to(&self, agent_name: &str) -> bool {
+        self.can_delegate_to.iter().any(|name| name == agent_name)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -106,8 +146,27 @@ impl AgentRegistry {
     pub fn subagents(&self) -> Vec<&AgentDefinition> {
         self.agents
             .values()
-            .filter(|agent| agent.mode == AgentMode::Subagent)
+            .filter(|agent| !agent.is_primary_switchable())
             .collect()
+    }
+
+    pub fn primary_switchable_agents(&self) -> Vec<&AgentDefinition> {
+        self.agents
+            .values()
+            .filter(|agent| agent.is_primary_switchable())
+            .collect()
+    }
+
+    pub fn explicit_invocation_candidates(&self) -> Vec<&AgentDefinition> {
+        self.agents
+            .values()
+            .filter(|agent| agent.is_explicitly_invocable())
+            .collect()
+    }
+
+    pub fn delegation_allowed(&self, agent_name: &str, target_name: &str) -> bool {
+        self.get(agent_name)
+            .is_some_and(|agent| agent.allows_delegation_to(target_name))
     }
 
     pub fn all_metadata(&self) -> Vec<(&str, &AgentMetadata)> {
@@ -210,98 +269,33 @@ pub fn parse_agent_markdown(content: &str, source: AgentSource) -> Result<AgentD
 
 pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<AgentDefinition> {
     let content = content.replace("\r\n", "\n");
-    let mut name = None;
-    let mut description_lines = Vec::new();
-    let mut sections: BTreeMap<String, String> = BTreeMap::new();
-    let mut current_section: Option<String> = None;
+    let (front_matter, body) = parse_agent_front_matter(&content)?;
 
-    for raw_line in content.lines() {
-        let line = raw_line.trim_end();
+    let name = front_matter
+        .name
+        .context("missing 'name' in front matter")?;
+    let description = front_matter
+        .description
+        .unwrap_or_else(|| format!("Agent '{name}'"));
 
-        if name.is_none() {
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            if let Some(value) = line.trim().strip_prefix("# ") {
-                let parsed_name = value.trim();
-                if parsed_name.is_empty() {
-                    bail!("agent name heading cannot be empty");
-                }
-                name = Some(parsed_name.to_string());
-                continue;
-            }
-
-            bail!("agent definition must start with '# <name>'");
-        }
-
-        if current_section.as_deref() != Some("system prompt") {
-            if let Some(section_name) = line.trim().strip_prefix("## ") {
-                current_section = Some(section_name.trim().to_ascii_lowercase());
-                sections
-                    .entry(current_section.clone().unwrap())
-                    .or_default();
-                continue;
-            }
-        }
-
-        match current_section.as_ref() {
-            Some(section_name) => {
-                let section = sections.entry(section_name.clone()).or_default();
-                if !section.is_empty() {
-                    section.push('\n');
-                }
-                section.push_str(line);
-            }
-            None => description_lines.push(line.to_string()),
-        }
+    let system_prompt = body.trim().to_string();
+    if system_prompt.is_empty() {
+        bail!("agent body (system prompt) cannot be empty");
     }
 
-    let name = name.context("missing agent name heading")?;
-    let config = parse_key_value_section(
-        sections
-            .get("config")
-            .map(String::as_str)
-            .unwrap_or_default(),
-    )?;
-    let permissions = parse_key_value_section(
-        sections
-            .get("permissions")
-            .map(String::as_str)
-            .unwrap_or_default(),
-    )?;
-    let use_when = parse_bullet_section(
-        sections
-            .get("use when")
-            .map(String::as_str)
-            .unwrap_or_default(),
-    );
-    let avoid_when = parse_bullet_section(
-        sections
-            .get("avoid when")
-            .map(String::as_str)
-            .unwrap_or_default(),
-    );
-    let triggers = parse_trigger_section(
-        sections
-            .get("triggers")
-            .map(String::as_str)
-            .unwrap_or_default(),
-    )?;
-    let system_prompt = sections
-        .get("system prompt")
-        .map(|prompt| prompt.trim().to_string())
-        .filter(|prompt| !prompt.is_empty())
-        .context("missing '## System Prompt' section")?;
-
-    let description = normalize_text_block(&description_lines.join("\n"));
-    let description = if !description.is_empty() {
-        description
-    } else if let Some(first_use) = use_when.first() {
-        first_use.clone()
-    } else {
-        format!("User-defined agent '{name}'")
-    };
+    let config: Vec<(String, String)> = front_matter
+        .config
+        .into_iter()
+        .map(|(k, v)| (normalize_key(&k), v))
+        .collect();
+    let permissions: Vec<(String, String)> = front_matter
+        .permissions
+        .into_iter()
+        .map(|(k, v)| (normalize_key(&k), v))
+        .collect();
+    let use_when = front_matter.use_when;
+    let avoid_when = front_matter.avoid_when;
+    let triggers = front_matter.triggers;
 
     let mut mode = AgentMode::Subagent;
     let mut cost = AgentCost::Cheap;
@@ -370,6 +364,8 @@ pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<Agen
         description,
         mode,
         cost,
+        user_invocable: front_matter.user_invocable,
+        can_delegate_to: front_matter.can_delegate_to,
         system_prompt,
         model: model_id.map(|model_id| ModelSpec {
             model_id,
@@ -526,48 +522,151 @@ fn parse_permission_level(value: &str) -> Result<PermissionLevel> {
     }
 }
 
-fn parse_key_value_section(section: &str) -> Result<Vec<(String, String)>> {
-    let mut values = Vec::new();
+fn parse_agent_front_matter(content: &str) -> Result<(AgentFrontMatter, &str)> {
+    let Some(content) = content.strip_prefix("---\n") else {
+        return Ok((AgentFrontMatter::default_with_user_invocable(), content));
+    };
 
-    for line in section.lines() {
-        let line = line.trim();
+    let (block, rest) = content
+        .split_once("\n---\n")
+        .context("missing closing '---' for agent front matter")?;
+    let mut front_matter = AgentFrontMatter::default_with_user_invocable();
+    let mut lines = block.lines().peekable();
+
+    while let Some(raw_line) = lines.next() {
+        let line = raw_line.trim();
         if line.is_empty() {
             continue;
         }
 
-        let item = line
-            .strip_prefix("- ")
-            .with_context(|| format!("expected bullet list item, got: {line}"))?;
-        let (key, value) = item
+        let (key, value) = line
             .split_once(':')
             .with_context(|| format!("expected '<key>: <value>' entry, got: {line}"))?;
-        values.push((normalize_key(key), value.trim().to_string()));
+        match normalize_key(key).as_str() {
+            "name" => {
+                front_matter.name = Some(value.trim().to_string());
+            }
+            "description" => {
+                front_matter.description = Some(value.trim().to_string());
+            }
+            "userinvocable" => {
+                front_matter.user_invocable = parse_bool(value.trim())?;
+            }
+            "candelegateto" => {
+                front_matter.can_delegate_to = parse_string_list(value.trim(), &mut lines)?;
+            }
+            "config" => {
+                front_matter.config = parse_nested_key_values(value.trim(), &mut lines)?;
+            }
+            "usewhen" => {
+                front_matter.use_when = parse_string_list(value.trim(), &mut lines)?;
+            }
+            "avoidwhen" => {
+                front_matter.avoid_when = parse_string_list(value.trim(), &mut lines)?;
+            }
+            "triggers" => {
+                front_matter.triggers = parse_nested_key_values(value.trim(), &mut lines)?;
+            }
+            "permissions" => {
+                front_matter.permissions = parse_nested_key_values(value.trim(), &mut lines)?;
+            }
+            other => bail!("unsupported front matter key: {other}"),
+        }
     }
 
-    Ok(values)
+    Ok((front_matter, rest))
 }
 
-fn parse_bullet_section(section: &str) -> Vec<String> {
-    section
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("- "))
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
+impl AgentFrontMatter {
+    fn default_with_user_invocable() -> Self {
+        Self {
+            name: None,
+            description: None,
+            user_invocable: default_user_invocable(),
+            can_delegate_to: Vec::new(),
+            config: Vec::new(),
+            use_when: Vec::new(),
+            avoid_when: Vec::new(),
+            triggers: Vec::new(),
+            permissions: Vec::new(),
+        }
+    }
 }
 
-fn parse_trigger_section(section: &str) -> Result<Vec<(String, String)>> {
-    let mut triggers = Vec::new();
+fn parse_bool(value: &str) -> Result<bool> {
+    match normalize_key(value).as_str() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => bail!("invalid boolean value: {value}"),
+    }
+}
 
-    for line in parse_bullet_section(section) {
-        let (trigger, meaning) = line
-            .split_once(':')
-            .with_context(|| format!("invalid trigger entry: {line}"))?;
-        triggers.push((trigger.trim().to_string(), meaning.trim().to_string()));
+fn parse_string_list<'a, I>(value: &str, lines: &mut std::iter::Peekable<I>) -> Result<Vec<String>>
+where
+    I: Iterator<Item = &'a str>,
+{
+    if value.is_empty() {
+        let mut items = Vec::new();
+        while let Some(next_line) = lines.peek().copied() {
+            let trimmed = next_line.trim();
+            if trimmed.is_empty() {
+                lines.next();
+                continue;
+            }
+
+            if let Some(item) = trimmed.strip_prefix("- ") {
+                items.push(item.trim().to_string());
+                lines.next();
+                continue;
+            }
+
+            break;
+        }
+        return Ok(items);
     }
 
-    Ok(triggers)
+    if let Some(inner) = value
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+    {
+        return Ok(split_csv(inner));
+    }
+
+    bail!("invalid list value: {value}")
+}
+
+fn parse_nested_key_values<'a, I>(
+    value: &str,
+    lines: &mut std::iter::Peekable<I>,
+) -> Result<Vec<(String, String)>>
+where
+    I: Iterator<Item = &'a str>,
+{
+    if !value.is_empty() {
+        bail!("expected nested block, got inline value: {value}");
+    }
+    let mut items = Vec::new();
+    while let Some(next_line) = lines.peek().copied() {
+        let trimmed = next_line.trim();
+        if trimmed.is_empty() {
+            lines.next();
+            continue;
+        }
+        if !next_line.starts_with(' ') && !next_line.starts_with('\t') {
+            break;
+        }
+        if let Some((key, val)) = trimmed.split_once(':') {
+            items.push((key.trim().to_string(), val.trim().to_string()));
+            lines.next();
+        } else {
+            break;
+        }
+    }
+    Ok(items)
+}
+
+fn default_user_invocable() -> bool {
+    true
 }
 
 fn split_csv(value: &str) -> Vec<String> {
@@ -586,16 +685,6 @@ fn normalize_key(value: &str) -> String {
         .filter(|ch| !matches!(ch, ' ' | '-' | '_'))
         .flat_map(char::to_lowercase)
         .collect()
-}
-
-fn normalize_text_block(value: &str) -> String {
-    value
-        .lines()
-        .map(str::trim_end)
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string()
 }
 
 fn join_or_dash(values: &[String]) -> String {
@@ -668,29 +757,24 @@ mod tests {
         let path = temp.path().join("sample.md");
         fs::write(
             &path,
-            r#"# sample-agent
-
-A sample agent used in tests.
-
-## Config
-- mode: subagent
-- cost: cheap
-- model: gpt-4o-mini
-- max_turns: 30
-- temperature: 0.3
-
-## Permissions
-- allow: read_file, grep, glob
-- deny: bash(rm:*)
-
-## Use When
-- description1
-- description2
-
-## Avoid When
-- description
-
-## System Prompt
+            r#"---
+name: sample-agent
+description: A sample agent used in tests.
+config:
+  mode: subagent
+  cost: cheap
+  model: gpt-4o-mini
+  max_turns: 30
+  temperature: 0.3
+permissions:
+  allow: read_file, grep, glob
+  deny: bash(rm:*)
+use_when:
+  - description1
+  - description2
+avoid_when:
+  - description
+---
 You are the test agent.
 Stay focused.
 "#,
@@ -725,6 +809,124 @@ Stay focused.
     }
 
     #[test]
+    fn parses_metadata_from_frontmatter() {
+        let agent = parse_agent_markdown(
+            r#"---
+name: meta-agent
+description: Read-only advisor
+user_invocable: true
+can_delegate_to: []
+config:
+  mode: subagent
+  cost: expensive
+  model: claude-sonnet-4.6
+  max_turns: 50
+  temperature: 0.1
+use_when:
+  - Need architecture guidance.
+  - Need debugging analysis.
+avoid_when:
+  - Task requires editing files.
+triggers:
+  architecture: Advise on system design
+  debug: Analyze root causes
+---
+You are the meta agent.
+"#,
+            AgentSource::Builtin,
+        )
+        .unwrap();
+
+        assert_eq!(agent.name, "meta-agent");
+        assert_eq!(agent.mode, AgentMode::Subagent);
+        assert_eq!(agent.cost, AgentCost::Expensive);
+        assert_eq!(agent.max_turns, Some(50));
+        assert_eq!(agent.temperature, Some(0.1));
+        assert_eq!(agent.model.unwrap().model_id, "claude-sonnet-4.6");
+        assert_eq!(
+            agent.metadata.use_when,
+            vec!["Need architecture guidance.", "Need debugging analysis."]
+        );
+        assert_eq!(
+            agent.metadata.avoid_when,
+            vec!["Task requires editing files."]
+        );
+        assert_eq!(
+            agent.metadata.triggers,
+            vec![
+                (
+                    "architecture".to_string(),
+                    "Advise on system design".to_string()
+                ),
+                ("debug".to_string(), "Analyze root causes".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_front_matter_metadata_and_defaults_user_invocable() {
+        let agent = parse_agent_markdown(
+            r#"---
+name: sample-agent
+user_invocable: false
+can_delegate_to:
+  - worker
+  - oracle
+config:
+  mode: subagent
+  cost: cheap
+  model: gpt-4o-mini
+---
+You are the test agent.
+"#,
+            AgentSource::UserDefined(PathBuf::from("sample.md")),
+        )
+        .unwrap();
+
+        assert!(!agent.user_invocable);
+        assert_eq!(agent.can_delegate_to, vec!["worker", "oracle"]);
+    }
+
+    #[test]
+    fn defaults_custom_agents_to_user_invocable_when_missing() {
+        let agent = parse_agent_markdown(
+            r#"---
+name: sample-agent
+config:
+  mode: subagent
+  cost: cheap
+  model: gpt-4o-mini
+---
+You are the test agent.
+"#,
+            AgentSource::UserDefined(PathBuf::from("sample.md")),
+        )
+        .unwrap();
+
+        assert!(agent.user_invocable);
+        assert!(agent.can_delegate_to.is_empty());
+    }
+
+    #[test]
+    fn rejects_malformed_front_matter_metadata() {
+        let error = parse_agent_markdown(
+            r#"---
+unknown: true
+---
+You are the test agent.
+"#,
+            AgentSource::UserDefined(PathBuf::from("sample.md")),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported front matter key: unknown")
+        );
+    }
+
+    #[test]
     fn registry_loads_builtin_agents() {
         let registry = AgentRegistry::load_from_paths(Vec::<PathBuf>::new()).unwrap();
 
@@ -748,6 +950,75 @@ Stay focused.
             AgentMode::Primary
         );
         assert_eq!(registry.get("explore").unwrap().cost, AgentCost::Free);
+        assert!(registry.get("orchestrator").unwrap().user_invocable);
+        assert_eq!(
+            registry.get("orchestrator").unwrap().can_delegate_to,
+            vec![
+                "worker",
+                "oracle",
+                "explore",
+                "librarian",
+                "planner",
+                "reviewer"
+            ]
+        );
+    }
+
+    #[test]
+    fn registry_exposes_filtered_agent_sets_from_metadata() {
+        let registry = AgentRegistry::load_from_paths(Vec::<PathBuf>::new()).unwrap();
+
+        let primary_names = registry
+            .primary_switchable_agents()
+            .into_iter()
+            .map(|agent| agent.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(primary_names, vec!["orchestrator", "planner"]);
+
+        let invocable_names = registry
+            .explicit_invocation_candidates()
+            .into_iter()
+            .map(|agent| agent.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            invocable_names,
+            vec![
+                "explore",
+                "librarian",
+                "oracle",
+                "orchestrator",
+                "planner",
+                "reviewer",
+                "worker",
+            ]
+        );
+
+        assert!(!registry.delegation_allowed("worker", "oracle"));
+        assert!(registry.delegation_allowed("orchestrator", "oracle"));
+        assert!(registry.delegation_allowed("orchestrator", "reviewer"));
+    }
+
+    #[test]
+    fn agent_definition_exposes_delegation_allowlist_checks() {
+        let agent = parse_agent_markdown(
+            r#"---
+name: sample-agent
+user_invocable: true
+can_delegate_to: [worker, oracle]
+config:
+  mode: primary
+  cost: cheap
+---
+You are the test agent.
+"#,
+            AgentSource::UserDefined(PathBuf::from("sample.md")),
+        )
+        .unwrap();
+
+        assert!(agent.is_primary_switchable());
+        assert!(agent.is_explicitly_invocable());
+        assert!(agent.allows_delegation_to("worker"));
+        assert!(!agent.allows_delegation_to("reviewer"));
     }
 
     #[test]

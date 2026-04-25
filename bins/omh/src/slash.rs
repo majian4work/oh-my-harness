@@ -2,27 +2,27 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::tui::input_ast::SlashInvocation;
+
 pub enum SlashResult {
     Response(String),
+    Notify(String),
     ListModels { force_refresh: bool },
-    NotACommand,
+    ListAgents,
+    ListNotifications,
 }
 
-pub fn dispatch(input: &str, workspace_root: &Path) -> Result<SlashResult> {
-    let input = input.trim();
-    if !input.starts_with('/') {
-        return Ok(SlashResult::NotACommand);
-    }
-
-    let mut parts = input[1..].splitn(2, ' ');
-    let cmd = parts.next().unwrap_or("");
-    let args = parts.next().unwrap_or("").trim();
+pub fn dispatch(invocation: &SlashInvocation, workspace_root: &Path) -> Result<SlashResult> {
+    let cmd = invocation.command.as_str();
+    let args = invocation.args.as_str();
 
     match cmd {
         "models" => {
             let force_refresh = args.eq_ignore_ascii_case("refresh");
             Ok(SlashResult::ListModels { force_refresh })
         }
+        "agents" => Ok(SlashResult::ListAgents),
+        "notifications" => Ok(SlashResult::ListNotifications),
         "evolution" | "evolve" => dispatch_evolution(args),
         "skills" => list_skills(workspace_root),
         "skill" => show_skill(args, workspace_root),
@@ -35,14 +35,14 @@ pub fn dispatch(input: &str, workspace_root: &Path) -> Result<SlashResult> {
                     skill.name, skill.description, skill.content
                 )));
             }
-            Ok(SlashResult::Response(format!("Unknown command: /{cmd}")))
+            Ok(SlashResult::Notify(format!("Unknown command: /{cmd}")))
         }
     }
 }
 
 fn dispatch_evolution(args: &str) -> Result<SlashResult> {
     match args {
-        "" => Ok(SlashResult::Response(
+        "" => Ok(SlashResult::Notify(
             "Usage: /evolution <log|consolidate|pause|resume>".to_string(),
         )),
         "log" => Ok(SlashResult::Response(
@@ -53,9 +53,9 @@ fn dispatch_evolution(args: &str) -> Result<SlashResult> {
             "Evolution consolidate: not yet connected to runtime.\nUse `omh evolution consolidate` from CLI."
                 .to_string(),
         )),
-        "pause" => Ok(SlashResult::Response("Evolution paused.".to_string())),
-        "resume" => Ok(SlashResult::Response("Evolution resumed.".to_string())),
-        other => Ok(SlashResult::Response(format!(
+        "pause" => Ok(SlashResult::Notify("Evolution paused.".to_string())),
+        "resume" => Ok(SlashResult::Notify("Evolution resumed.".to_string())),
+        other => Ok(SlashResult::Notify(format!(
             "Unknown evolution command: {other}\nAvailable: log, consolidate, pause, resume"
         ))),
     }
@@ -67,8 +67,8 @@ fn list_skills(workspace_root: &Path) -> Result<SlashResult> {
 
     let all: Vec<_> = registry.all().collect();
     if all.is_empty() {
-        return Ok(SlashResult::Response(
-            "No skills found.\nAdd skills to .omh/skills/ or $XDG_CONFIG_HOME/omh/skills/"
+        return Ok(SlashResult::Notify(
+            "No skills found. Add skills to .omh/skills/ or $XDG_CONFIG_HOME/omh/skills/"
                 .to_string(),
         ));
     }
@@ -90,7 +90,7 @@ fn list_skills(workspace_root: &Path) -> Result<SlashResult> {
 
 fn show_skill(name: &str, workspace_root: &Path) -> Result<SlashResult> {
     if name.is_empty() {
-        return Ok(SlashResult::Response("Usage: /skill <name>".to_string()));
+        return Ok(SlashResult::Notify("Usage: /skill <name>".to_string()));
     }
 
     let registry =
@@ -104,15 +104,67 @@ fn show_skill(name: &str, workspace_root: &Path) -> Result<SlashResult> {
         None => {
             let available: Vec<_> = registry.all().map(|s| s.name.clone()).collect();
             if available.is_empty() {
-                Ok(SlashResult::Response(format!(
+                Ok(SlashResult::Notify(format!(
                     "Skill '{name}' not found. No skills configured."
                 )))
             } else {
-                Ok(SlashResult::Response(format!(
-                    "Skill '{name}' not found.\nAvailable: {}",
+                Ok(SlashResult::Notify(format!(
+                    "Skill '{name}' not found. Available: {}",
                     available.join(", ")
                 )))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SlashResult, dispatch};
+    use crate::tui::input_ast::SlashInvocation;
+
+    fn slash(raw: &str, command: &str, args: &str) -> SlashInvocation {
+        SlashInvocation {
+            raw: raw.to_string(),
+            command: command.to_string(),
+            args: args.to_string(),
+        }
+    }
+
+    #[test]
+    fn dispatch_unknown_command_returns_response() {
+        let dir = std::env::temp_dir();
+        let result = dispatch(&slash("/nope", "nope", ""), &dir).unwrap();
+        assert!(matches!(result, SlashResult::Notify(msg) if msg.contains("Unknown command")));
+    }
+
+    #[test]
+    fn dispatch_models_returns_list_models() {
+        let dir = std::env::temp_dir();
+        let result = dispatch(&slash("/models", "models", ""), &dir).unwrap();
+        assert!(matches!(
+            result,
+            SlashResult::ListModels {
+                force_refresh: false
+            }
+        ));
+    }
+
+    #[test]
+    fn dispatch_models_refresh_returns_force_refresh() {
+        let dir = std::env::temp_dir();
+        let result = dispatch(&slash("/models refresh", "models", "refresh"), &dir).unwrap();
+        assert!(matches!(
+            result,
+            SlashResult::ListModels {
+                force_refresh: true
+            }
+        ));
+    }
+
+    #[test]
+    fn dispatch_agents_returns_list_agents() {
+        let dir = std::env::temp_dir();
+        let result = dispatch(&slash("/agents", "agents", ""), &dir).unwrap();
+        assert!(matches!(result, SlashResult::ListAgents));
     }
 }

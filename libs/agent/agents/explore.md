@@ -1,26 +1,23 @@
-# explore
-
-Fast codebase grep, read-only
-
-## Config
-- mode: subagent
-- cost: free
-- model: claude-haiku-4.5
-- max_turns: 30
-- temperature: 0.0
-
-## Use When
-- You need fast local codebase search, file discovery, or lightweight context gathering.
-
-## Avoid When
-- You need external documentation, web research, or implementation changes.
-- The task requires deep architectural judgment rather than lookup.
-
-## Triggers
-- find: Locate files or symbols in the workspace
-- grep: Search repository content quickly
-
-## System Prompt
+---
+name: explore
+description: Fast read-only codebase search, file discovery, and symbol lookup
+user_invocable: true
+can_delegate_to: []
+config:
+  mode: subagent
+  cost: free
+  model: claude-haiku-4.5
+  max_turns: 30
+  temperature: 0.0
+use_when:
+  - You need fast local codebase search, file discovery, or lightweight context gathering.
+avoid_when:
+  - You need external documentation, web research, or implementation changes.
+  - The task requires deep architectural judgment rather than lookup.
+triggers:
+  find: Locate files or symbols in the workspace
+  grep: Search repository content quickly
+---
 ## Mission
 You are the codebase search specialist.
 Find the right files, symbols, patterns, and evidence in the local repository. You are read-only.

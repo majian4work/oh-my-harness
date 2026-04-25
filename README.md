@@ -8,14 +8,13 @@ A multi-agent orchestration framework written in Rust. Ships with an AI coding a
 
 ## Features
 
-- **Multi-agent system** — Built-in agents (orchestrator, worker, oracle, explore, librarian, planner, reviewer) + user-defined agents via Markdown
+- **Multi-agent system** — Built-in agents (orchestrator, worker, oracle, explore, librarian, planner, reviewer) + user-defined agents via Markdown (YAML front matter + system prompt body)
 - **User-defined skills** — `.omh/skills/*.md` with 4 activation modes (always / auto / semantic / manual)
 - **Multi-provider LLM** — OpenAI-compatible, Anthropic, GitHub Copilot, custom endpoints
 - **Protocol support** — MCP (Model Context Protocol) + ACP (Agent Communication Protocol)
-- **Memory & self-evolution** — SQLite FTS5 + Markdown knowledge base, agent learns from corrections
-- **Crash recovery** — WAL-based mid-turn recovery + git snapshots
+- **Memory & self-evolution** — Markdown knowledge base, agent learns from corrections
 - **Multi-frontend** — TUI (default), CLI one-shot
-- **Provider auth management** — `omh auth login/logout/list/status`, TUI popup (Ctrl+A)
+- **Provider auth management** — `omh auth login/logout/list/status`
 - **Turn telemetry** — per-session JSONL metrics for latency, loop depth, tool usage, and token consumption
 
 ## Workspace layout
@@ -33,9 +32,8 @@ libs/
   permission/      # Permission rules & evaluation
   hook/            # Hook trait & pipeline
   agent/           # Agent definition, registry, 7 built-in agents
-  memory/          # SQLite FTS5 + Markdown memory store
+  memory/          # Markdown memory store
   evolution/       # Self-evolution engine
-  snapshot/        # WAL crash recovery + git snapshots
   mcp/             # MCP JSON-RPC client
   acp/             # ACP client + server trait
   runtime/         # Harness, AgentRuntime, BackgroundTaskManager
@@ -45,15 +43,15 @@ libs/
 ## Quick start
 
 ```bash
-# TUI (default)
-cargo run -p omh
-
-# CLI one-shot
-cargo run -p omh -- cli "explain this codebase"
-
 # Provider auth
 cargo run -p omh -- auth login openai --key sk-...
 cargo run -p omh -- auth status
+
+# Oneshot non-interactive run
+cargo run -p omh -- run "explain this codebase"
+
+# TUI (default)
+cargo run -p omh
 ```
 
 ## Developer Tooling
@@ -94,8 +92,8 @@ disallow_error_categories = ["timeout", "provider"]
 
 ## Configuration
 
-- **Project-level**: `.omh/` directory (agents, skills, rules, sessions, memory)
-- **Global**: `~/.config/omh/` (agents, skills, credentials)
+- **Project-level**: `.omh/` directory (agents, skills, rules, memory)
+- **Global**: `~/.config/omh/` (agents, skills)
 - **Environment**: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
 
 See **[docs/configuration.md](docs/configuration.md)** for the full configuration reference.
@@ -104,15 +102,15 @@ See **[docs/configuration.md](docs/configuration.md)** for the full configuratio
 
 ### Built-in Agents
 
-| Agent | Mode | Cost | Role |
-|-------|------|------|------|
-| **orchestrator** | primary | expensive | Central coordinator — receives user input, decomposes tasks, dispatches to sub-agents |
-| **worker** | subagent | cheap | Focused executor — carries out concrete code changes, never re-delegates |
-| **oracle** | subagent | expensive | Read-only advisor — architecture guidance, debugging analysis, tradeoff evaluation |
-| **explore** | subagent | free | Codebase search — locates files, symbols, and patterns in the local repository |
-| **librarian** | subagent | cheap | External research — official docs, API references, web search |
-| **planner** | primary | expensive | Plan-only — turns ambiguous requests into structured, verifiable plans |
-| **reviewer** | subagent | expensive | Post-implementation QA — answers "can this ship?", defaults to approval |
+| Agent            | Mode     | Cost      | Role                                                                                  |
+| ---------------- | -------- | --------- | ------------------------------------------------------------------------------------- |
+| **orchestrator** | primary  | expensive | Central coordinator — receives user input, decomposes tasks, dispatches to sub-agents |
+| **worker**       | subagent | cheap     | Focused executor — carries out concrete code changes, never re-delegates              |
+| **oracle**       | subagent | expensive | Read-only advisor — architecture guidance, debugging analysis, tradeoff evaluation    |
+| **explore**      | subagent | free      | Codebase search — locates files, symbols, and patterns in the local repository        |
+| **librarian**    | subagent | cheap     | External research — official docs, API references, web search                         |
+| **planner**      | primary  | expensive | Plan-only — turns ambiguous requests into structured, verifiable plans                |
+| **reviewer**     | subagent | expensive | Post-implementation QA — answers "can this ship?", defaults to approval               |
 
 ### Typical Flow
 
