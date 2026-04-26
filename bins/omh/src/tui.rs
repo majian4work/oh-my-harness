@@ -175,7 +175,6 @@ struct App {
     todos: Vec<bus::TodoItem>,
     modified_files: Vec<GitRepoStatus>,
     last_git_poll: Option<Instant>,
-    mcp_servers: Vec<bus::McpServerStatus>,
     turn_start: Option<Instant>,
     title_generated: bool,
     status_scroll: u16,
@@ -198,7 +197,6 @@ impl App {
         crate::run::register_providers_from_env(&mut harness)?;
         let (provider_id, model_id) = resolve_active_model(&harness);
         let bus_rx = Some(harness.bus.subscribe());
-        let mcp_servers = harness.mcp_statuses.lock().unwrap().clone();
         let harness = Arc::new(harness);
 
         {
@@ -233,7 +231,6 @@ impl App {
             todos: Vec::new(),
             modified_files: Vec::new(),
             last_git_poll: None,
-            mcp_servers,
             turn_start: None,
             title_generated: false,
             status_scroll: 0,
@@ -1026,9 +1023,7 @@ impl App {
             bus::AgentEvent::FileModified { .. } => {
                 // git status is polled periodically instead
             }
-            bus::AgentEvent::McpServersChanged { servers } => {
-                self.mcp_servers = servers;
-            }
+            bus::AgentEvent::McpServersChanged { .. } => {}
             _ => {}
         }
     }
@@ -2192,31 +2187,6 @@ impl App {
             Span::styled("● idle", Style::default().fg(palette::GREEN))
         };
         right_lines.push(Line::from(vec![Span::raw(" "), state_span]));
-        right_lines.push(Line::raw(""));
-
-        right_lines.push(Line::from(vec![Span::styled(
-            "─── MCP Servers ───",
-            Style::default().fg(palette::MUTED),
-        )]));
-        if self.mcp_servers.is_empty() {
-            right_lines.push(Line::styled(" (none)", Style::default().fg(palette::MUTED)));
-        } else {
-            for srv in &self.mcp_servers {
-                let (indicator, color) = if srv.status == "connected" {
-                    ("●", palette::GREEN)
-                } else {
-                    ("○", palette::RED)
-                };
-                right_lines.push(Line::from(vec![
-                    Span::styled(format!(" {indicator} "), Style::default().fg(color)),
-                    Span::raw(&*srv.name),
-                    Span::styled(
-                        format!(" ({}T)", srv.tools_count),
-                        Style::default().fg(palette::MUTED),
-                    ),
-                ]));
-            }
-        }
         right_lines.push(Line::raw(""));
 
         if !self.sub_agents.is_empty() {
