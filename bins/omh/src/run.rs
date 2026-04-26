@@ -5,12 +5,18 @@ use runtime::AgentRuntime;
 
 use crate::{auth, init_harness};
 
+/// Default omt endpoint to probe.
+const DEFAULT_OMT_ENDPOINT: &str = "http://127.0.0.1:9120";
+
 pub async fn run_oneshot(prompt: &str, agent: &str, continue_last: bool) -> Result<()> {
     let mut harness = init_harness()?;
     register_providers_from_env(&mut harness)?;
 
     let workspace_root = std::env::current_dir()?;
     harness.connect_mcp_servers(&workspace_root);
+
+    // Attempt to join omt team in the background
+    let _team_handle = try_join_omt_team(agent);
 
     let agent_def = harness
         .agent_registry
@@ -81,6 +87,70 @@ pub async fn run_oneshot(prompt: &str, agent: &str, continue_last: bool) -> Resu
     );
 
     Ok(())
+}
+
+/// Try to join an omt team on startup (best-effort, non-blocking).
+///
+/// Checks `OMT_ENDPOINT` env var (or probes the default 127.0.0.1:9120).
+/// If reachable, sends a team/join request with this omh instance's info.
+/// Returns a JoinHandle that can be awaited or ignored.
+fn try_join_omt_team(agent: &str) -> tokio::task::JoinHandle<()> {
+    let role = agent.to_string();
+    tokio::spawn(async move {
+        let omt_url = env::var("OMT_ENDPOINT").unwrap_or_else(|_| DEFAULT_OMT_ENDPOINT.to_string());
+        let client = a2a::A2aClient::new();
+
+        // Quick probe
+        if !client.probe(&omt_url).await {
+            return;
+        }
+
+        let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "omh".to_string());
+        let pid = std::process::id();
+
+        let card = a2a::AgentCard {
+            name: format!("{hostname}-{pid}"),
+            description: Some(format!("omh agent (role: {role})")),
+            url: String::new(), // omh doesn't expose an A2A server
+            provider: None,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            capabilities: a2a::AgentCapabilities::default(),
+            skills: vec![a2a::AgentSkill {
+                id: role.clone(),
+                name: role.clone(),
+                description: Some(format!("Performs {role} tasks")),
+                tags: vec![role.clone(), "coding".to_string()],
+                examples: vec![],
+            }],
+            default_input_modes: vec!["text/plain".to_string()],
+            default_output_modes: vec!["text/plain".to_string()],
+        };
+
+        let request = a2a::TeamJoinRequest {
+            card,
+            endpoint: String::new(), // omh is not an A2A server
+            role: role.clone(),
+            capacity: 1,
+        };
+
+        match client.team_join(&omt_url, &request).await {
+            Ok(resp) if resp.accepted => {
+                tracing::info!(
+                    "joined omt team as {:?} (role={role})",
+                    resp.instance_id
+                );
+            }
+            Ok(resp) => {
+                tracing::debug!(
+                    "omt team join declined: {}",
+                    resp.message.as_deref().unwrap_or("no reason")
+                );
+            }
+            Err(e) => {
+                tracing::debug!("failed to join omt team: {e:#}");
+            }
+        }
+    })
 }
 
 pub(crate) fn register_providers_from_env(harness: &mut runtime::Harness) -> Result<()> {

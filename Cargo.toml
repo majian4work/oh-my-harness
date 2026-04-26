@@ -2,6 +2,8 @@
 members = [
     "bins/omh",
     "bins/omh-dev",
+    "bins/omt",
+    "libs/a2a",
     "libs/acp",
     "libs/agent",
     "libs/bus",
@@ -26,6 +28,7 @@ edition = "2024"
 [workspace.dependencies]
 syntect = "5"
 # internal crates
+a2a = { path = "libs/a2a" }
 acp = { path = "libs/acp" }
 agent = { path = "libs/agent" }
 bus = { path = "libs/bus" }
@@ -46,8 +49,9 @@ omh-trace = { path = "libs/trace" }
 # external
 anyhow = "1"
 async-trait = "0.1"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 crossterm = "0.29.0"
+axum = { version = "0.8", features = ["json"] }
 futures = "0.3"
 glob = "0.3"
 ignore = "0.4"
@@ -59,6 +63,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
+libc = "0.2"
 toml = "0.8"
 tracing = "0.1"
 tracing-appender = "0.2"

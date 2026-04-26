@@ -1,34 +1,27 @@
 [package]
-name = "omh"
+name = "omt"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 a2a = { workspace = true }
-base64 = "0.22"
-syntect = { workspace = true }
-agent = { workspace = true }
 anyhow = { workspace = true }
-bus = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
 chrono = { workspace = true }
 clap = { version = "4", features = ["derive"] }
-dialoguer = "0.11"
 crossterm = { workspace = true }
 dirs = { workspace = true }
 futures = { workspace = true }
-mcp = { workspace = true }
-memory = { workspace = true }
+libc = { workspace = true }
 message = { workspace = true }
-omh-trace = { workspace = true }
 provider = { workspace = true }
 ratatui = { workspace = true }
 reqwest = { workspace = true }
-runtime = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-skill = { workspace = true }
 tokio = { workspace = true }
-toml = { workspace = true }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true }
 unicode-width = "0.2"
