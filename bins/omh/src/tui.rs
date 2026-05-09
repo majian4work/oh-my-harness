@@ -838,11 +838,10 @@ impl App {
             tokio::spawn(async move {
                 // Log user message + spawn_agent tool_use to parent session
                 let tool_call_id = format!("tc-{}", ulid::Ulid::new());
-                let user_msg = message::Message::user(
-                    format!("msg-{}", ulid::Ulid::new()),
-                    &text,
-                );
-                let _ = harness.session_manager.append_message(&session_id, &user_msg);
+                let user_msg = message::Message::user(format!("msg-{}", ulid::Ulid::new()), &text);
+                let _ = harness
+                    .session_manager
+                    .append_message(&session_id, &user_msg);
 
                 let spawn_input = serde_json::json!({
                     "agent_name": target_agent,
@@ -860,10 +859,13 @@ impl App {
                     }],
                     created_at: message::now_millis(),
                 };
-                let _ = harness.session_manager.append_message(&session_id, &tool_use_msg);
+                let _ = harness
+                    .session_manager
+                    .append_message(&session_id, &tool_use_msg);
 
                 // Create child session and run agent at depth=1
-                let workspace_root = harness.session_manager
+                let workspace_root = harness
+                    .session_manager
                     .get(&session_id)
                     .map(|s| s.workspace_root)
                     .unwrap_or_default();
@@ -879,11 +881,8 @@ impl App {
                     agent: target_agent.clone(),
                 });
 
-                let mut runtime = AgentRuntime::new(
-                    target_agent.clone(),
-                    child_session.clone(),
-                    max_turns,
-                );
+                let mut runtime =
+                    AgentRuntime::new(target_agent.clone(), child_session.clone(), max_turns);
                 runtime = runtime.with_logger(&harness);
                 runtime.model_override = Some(model_override);
                 runtime.interactive = false;
@@ -907,7 +906,9 @@ impl App {
                     }],
                     created_at: message::now_millis(),
                 };
-                let _ = harness.session_manager.append_message(&session_id, &tool_result_msg);
+                let _ = harness
+                    .session_manager
+                    .append_message(&session_id, &tool_result_msg);
 
                 if is_error {
                     harness.bus.publish(bus::AgentEvent::SubagentFailed {
@@ -926,9 +927,9 @@ impl App {
                     session_id: session_id.clone(),
                     text: result_text,
                 });
-                harness.bus.publish(bus::AgentEvent::TurnComplete {
-                    session_id,
-                });
+                harness
+                    .bus
+                    .publish(bus::AgentEvent::TurnComplete { session_id });
             });
         } else {
             // Normal flow: run default foreground agent
@@ -1344,7 +1345,13 @@ impl App {
         } else {
             (end, start)
         };
-        let last = lines.len().saturating_sub(1);
+        if lines.is_empty() {
+            return;
+        }
+        let last = lines.len() - 1;
+        if start.0 > last {
+            return;
+        }
 
         for row_idx in start.0..=end.0.min(last) {
             let left = if row_idx == start.0 { start.1 } else { 0 };
