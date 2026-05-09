@@ -6,8 +6,8 @@ can_delegate_to: []
 config:
   mode: subagent
   tier: cheap
-  max_turns: 30
   effort: low
+  max_turns: 30
 avoid_when:
   - You need external documentation, web research, or implementation changes.
   - The task requires deep architectural judgment rather than lookup.

@@ -6,8 +6,8 @@ can_delegate_to: []
 config:
   mode: subagent
   tier: premium
-  max_turns: 50
   effort: high
+  max_turns: 50
 avoid_when:
   - The delegated task requires editing files or executing changes.
 triggers:

@@ -6,8 +6,8 @@ can_delegate_to: []
 config:
   mode: primary
   tier: premium
-  max_turns: 80
   effort: high
+  max_turns: 80
 avoid_when:
   - The task should be implemented directly instead of planned in detail.
 ---
