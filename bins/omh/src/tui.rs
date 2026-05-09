@@ -119,6 +119,7 @@ enum SuggestionTrigger {
     Slash,
     Agent,
     File,
+    SwitchAgent,
     Model,
 }
 
@@ -504,13 +505,8 @@ impl App {
             },
             Suggestion {
                 label: "/agents".into(),
-                description: "List available agents".into(),
-                needs_arg: false,
-            },
-            Suggestion {
-                label: "/agent".into(),
                 description: "Switch foreground agent".into(),
-                needs_arg: true,
+                needs_arg: false,
             },
             Suggestion {
                 label: "/effort".into(),
@@ -1323,6 +1319,57 @@ impl App {
         });
     }
 
+    fn show_agent_picker(&mut self) {
+        let Some(harness) = &self.harness else { return };
+        let agents = harness.agent_registry.explicit_invocation_candidates();
+        if agents.is_empty() {
+            self.messages
+                .push(ChatMessage::new("system", "No agents available."));
+            return;
+        }
+        let items: Vec<Suggestion> = agents
+            .iter()
+            .map(|a| {
+                let current = if a.name == self.foreground_agent {
+                    " (current)"
+                } else {
+                    ""
+                };
+                Suggestion {
+                    label: a.name.clone(),
+                    description: format!("{}{current}", a.description),
+                    needs_arg: false,
+                }
+            })
+            .collect();
+        self.suggestions = Some(SuggestionState {
+            items,
+            selected: 0,
+            trigger: SuggestionTrigger::SwitchAgent,
+        });
+    }
+
+    fn switch_foreground_agent(&mut self, name: &str) {
+        let Some(harness) = &self.harness else { return };
+        if harness.agent_registry.get(name).is_none() {
+            self.messages.push(ChatMessage::new(
+                "system",
+                format!("Unknown agent: {name}"),
+            ));
+            return;
+        }
+        self.foreground_agent = name.to_string();
+        if let Some(sid) = &self.session_id {
+            let mut state = harness.session_manager.load_state(sid);
+            state.foreground_agent = Some(name.to_string());
+            let _ = harness.session_manager.save_state(sid, &state);
+        }
+        self.messages.push(ChatMessage::new(
+            "system",
+            format!("✓ Switched to agent: {name}"),
+        ));
+    }
+
     fn cursor_position(&self, input_area: Rect) -> Option<(u16, u16)> {
         let prompt_width = if self.is_streaming { 3u16 } else { 2u16 };
         Some((
@@ -1657,6 +1704,13 @@ impl App {
                             self.suggestions = None;
                             return None;
                         }
+                        SuggestionTrigger::SwitchAgent => {
+                            self.switch_foreground_agent(&selected);
+                            self.input.clear();
+                            self.cursor_position = 0;
+                            self.suggestions = None;
+                            return None;
+                        }
                     }
                 }
                 KeyCode::Esc => {
@@ -1723,46 +1777,11 @@ impl App {
                                     return Some(AppAction::LoadModels);
                                 }
                                 Ok(SlashResult::ListAgents) => {
-                                    if let Some(harness) = &self.harness {
-                                        let agents =
-                                            harness.agent_registry.explicit_invocation_candidates();
-                                        let list = agents
-                                            .iter()
-                                            .map(|a| format!("  {}: {}", a.name, a.description))
-                                            .collect::<Vec<_>>()
-                                            .join("\n");
-                                        self.messages.push(ChatMessage::new(
-                                            "system",
-                                            format!("Available agents:\n{list}"),
-                                        ));
-                                    }
+                                    self.show_agent_picker();
                                 }
                                 Ok(SlashResult::ListNotifications) => {
                                     self.messages
                                         .push(ChatMessage::new("system", "No notifications."));
-                                }
-                                Ok(SlashResult::SwitchAgent(name)) => {
-                                    if let Some(harness) = &self.harness {
-                                        if harness.agent_registry.get(&name).is_none() {
-                                            self.messages.push(ChatMessage::new(
-                                                "system",
-                                                format!("Unknown agent: {name}\nUse /agents to list available agents."),
-                                            ));
-                                        } else {
-                                            self.foreground_agent = name.clone();
-                                            if let Some(sid) = &self.session_id {
-                                                let mut state =
-                                                    harness.session_manager.load_state(sid);
-                                                state.foreground_agent = Some(name.clone());
-                                                let _ =
-                                                    harness.session_manager.save_state(sid, &state);
-                                            }
-                                            self.messages.push(ChatMessage::new(
-                                                "system",
-                                                format!("✓ Switched to agent: {name}"),
-                                            ));
-                                        }
-                                    }
                                 }
                                 Ok(SlashResult::SwitchEffort(level)) => {
                                     self.effort = level;

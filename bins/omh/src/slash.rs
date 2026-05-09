@@ -10,7 +10,6 @@ pub enum SlashResult {
     ListModels,
     ListAgents,
     ListNotifications,
-    SwitchAgent(String),
     SwitchEffort(provider::Effort),
     /// Run a skill: inject skill content as context and execute a turn with the prompt.
     RunSkill {
@@ -26,7 +25,6 @@ pub fn dispatch(invocation: &SlashInvocation, workspace_root: &Path) -> Result<S
     match cmd {
         "models" => Ok(SlashResult::ListModels),
         "agents" => Ok(SlashResult::ListAgents),
-        "agent" => dispatch_agent(args),
         "effort" => dispatch_effort(args),
         "notifications" => Ok(SlashResult::ListNotifications),
         "evolution" | "evolve" => dispatch_evolution(args),
@@ -67,16 +65,6 @@ fn dispatch_evolution(args: &str) -> Result<SlashResult> {
             "Unknown evolution command: {other}\nAvailable: log, consolidate, pause, resume"
         ))),
     }
-}
-
-fn dispatch_agent(args: &str) -> Result<SlashResult> {
-    let name = args.trim();
-    if name.is_empty() {
-        return Ok(SlashResult::Notify(
-            "Usage: /agent <name>\nUse /agents to list available agents.".to_string(),
-        ));
-    }
-    Ok(SlashResult::SwitchAgent(name.to_string()))
 }
 
 fn dispatch_effort(args: &str) -> Result<SlashResult> {
