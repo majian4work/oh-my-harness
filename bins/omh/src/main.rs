@@ -75,7 +75,7 @@ pub fn init_harness() -> Result<Harness> {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "omh", about = "The orchestration framework for AI agents")]
+#[command(name = "omh", about = "The orchestration framework for AI agents", disable_help_subcommand = true)]
 struct Args {
     #[command(subcommand)]
     mode: Option<Mode>,
@@ -104,6 +104,9 @@ enum Mode {
         /// Agent to use
         #[arg(short, long, default_value = "orchestrator")]
         agent: String,
+        /// Model override (provider/model_id), e.g. anthropic/claude-sonnet-4-20250514
+        #[arg(short, long)]
+        model: Option<String>,
         /// Reasoning effort level: low, default, high
         #[arg(long, default_value = "default")]
         effort: String,
@@ -146,8 +149,9 @@ async fn main() -> Result<()> {
                 Mode::Run {
                     prompt,
                     agent,
+                    model,
                     effort,
-                } => run_oneshot(&prompt, &agent, args.r#continue, &effort).await,
+                } => run_oneshot(&prompt, &agent, args.r#continue, &effort, model.as_deref()).await,
                 Mode::Sessions { limit } => cmd_sessions(limit).await,
                 Mode::Memory(cmd) => cmd_memory(cmd).await,
                 Mode::Evolution(cmd) => cmd_evolution(cmd).await,

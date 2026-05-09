@@ -13,6 +13,7 @@ pub async fn run_oneshot(
     agent: &str,
     continue_last: bool,
     effort: &str,
+    model: Option<&str>,
 ) -> Result<()> {
     let mut harness = init_harness()?;
     register_providers_from_env(&mut harness)?;
@@ -68,6 +69,17 @@ pub async fn run_oneshot(
     let mut runtime = runtime.with_logger(&harness);
     runtime.interactive = false;
     runtime.effort_override = Some(effort_level).filter(|e| *e != provider::Effort::Default);
+    if let Some(model_str) = model {
+        let (provider_id, model_id) = if let Some((p, m)) = model_str.split_once('/') {
+            (Some(p.to_string()), m.to_string())
+        } else {
+            (None, model_str.to_string())
+        };
+        runtime.model_override = Some(provider::ModelSpec {
+            model_id,
+            provider_id,
+        });
+    }
 
     let start = std::time::Instant::now();
     let result = runtime.run_turn(&harness, prompt).await?;
