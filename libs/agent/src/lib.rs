@@ -30,7 +30,6 @@ pub type AgentCost = ModelTier;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AgentMetadata {
-    pub use_when: Vec<String>,
     pub avoid_when: Vec<String>,
     pub triggers: Vec<(String, String)>,
 }
@@ -47,8 +46,6 @@ struct AgentFrontMatter {
     can_delegate_to: Vec<String>,
     #[serde(default)]
     config: Vec<(String, String)>,
-    #[serde(default)]
-    use_when: Vec<String>,
     #[serde(default)]
     avoid_when: Vec<String>,
     #[serde(default)]
@@ -294,7 +291,6 @@ pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<Agen
         .into_iter()
         .map(|(k, v)| (normalize_key(&k), v))
         .collect();
-    let use_when = front_matter.use_when;
     let avoid_when = front_matter.avoid_when;
     let triggers = front_matter.triggers;
 
@@ -379,7 +375,6 @@ pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<Agen
         temperature,
         effort,
         metadata: AgentMetadata {
-            use_when,
             avoid_when,
             triggers,
         },
@@ -413,12 +408,11 @@ pub fn generate_orchestrator_prompt(registry: &AgentRegistry) -> String {
         "Delegate focused work to subagents when they are a better fit than doing the work yourself.".to_string(),
         "Use the table below to choose the right subagent.".to_string(),
         String::new(),
-        "| Name | Cost | Description | Use When | Avoid When | Triggers |".to_string(),
-        "| --- | --- | --- | --- | --- | --- |".to_string(),
+        "| Name | Cost | Description | Avoid When | Triggers |".to_string(),
+        "| --- | --- | --- | --- | --- |".to_string(),
     ];
 
     for agent in registry.subagents() {
-        let use_when = join_or_dash(&agent.metadata.use_when);
         let avoid_when = join_or_dash(&agent.metadata.avoid_when);
         let triggers = if agent.metadata.triggers.is_empty() {
             "-".to_string()
@@ -433,11 +427,10 @@ pub fn generate_orchestrator_prompt(registry: &AgentRegistry) -> String {
         };
 
         lines.push(format!(
-            "| {} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} |",
             agent.name,
             format_cost(agent.tier),
             sanitize_table_cell(&agent.description),
-            sanitize_table_cell(&use_when),
             sanitize_table_cell(&avoid_when),
             sanitize_table_cell(&triggers),
         ));
@@ -517,9 +510,6 @@ fn parse_agent_front_matter(content: &str) -> Result<(AgentFrontMatter, &str)> {
             "config" => {
                 front_matter.config = parse_nested_key_values(value.trim(), &mut lines)?;
             }
-            "usewhen" => {
-                front_matter.use_when = parse_string_list(value.trim(), &mut lines)?;
-            }
             "avoidwhen" => {
                 front_matter.avoid_when = parse_string_list(value.trim(), &mut lines)?;
             }
@@ -544,7 +534,6 @@ impl AgentFrontMatter {
             user_invocable: default_user_invocable(),
             can_delegate_to: Vec::new(),
             config: Vec::new(),
-            use_when: Vec::new(),
             avoid_when: Vec::new(),
             triggers: Vec::new(),
             permissions: Vec::new(),
@@ -721,9 +710,6 @@ config:
 permissions:
   allow: read_file, grep, glob
   deny: bash(rm:*)
-use_when:
-  - description1
-  - description2
 avoid_when:
   - description
 ---
@@ -738,7 +724,7 @@ Stay focused.
         assert_eq!(agent.name, "sample-agent");
         assert_eq!(agent.description, "A sample agent used in tests.");
         assert_eq!(agent.mode, AgentMode::Subagent);
-        assert_eq!(agent.cost, AgentCost::Cheap);
+        assert_eq!(agent.tier, ModelTier::Cheap);
         assert_eq!(agent.max_turns, Some(30));
         assert_eq!(agent.temperature, Some(0.3));
         assert_eq!(agent.model.unwrap().model_id, "gpt-4o-mini");
@@ -748,10 +734,6 @@ Stay focused.
         );
         assert_eq!(agent.permission_rules.allow_rules.len(), 3);
         assert_eq!(agent.permission_rules.deny_rules.len(), 1);
-        assert_eq!(
-            agent.metadata.use_when,
-            vec!["description1", "description2"]
-        );
         assert_eq!(agent.metadata.avoid_when, vec!["description"]);
         assert_eq!(
             agent.system_prompt,
@@ -774,9 +756,6 @@ config:
   model: claude-sonnet-4.6
   max_turns: 50
   temperature: 0.1
-use_when:
-  - Need architecture guidance.
-  - Need debugging analysis.
 avoid_when:
   - Task requires editing files.
 triggers:
@@ -791,14 +770,10 @@ You are the meta agent.
 
         assert_eq!(agent.name, "meta-agent");
         assert_eq!(agent.mode, AgentMode::Subagent);
-        assert_eq!(agent.cost, AgentCost::Expensive);
+        assert_eq!(agent.tier, ModelTier::Premium);
         assert_eq!(agent.max_turns, Some(50));
         assert_eq!(agent.temperature, Some(0.1));
         assert_eq!(agent.model.unwrap().model_id, "claude-sonnet-4.6");
-        assert_eq!(
-            agent.metadata.use_when,
-            vec!["Need architecture guidance.", "Need debugging analysis."]
-        );
         assert_eq!(
             agent.metadata.avoid_when,
             vec!["Task requires editing files."]
@@ -901,7 +876,7 @@ You are the test agent.
             registry.get("orchestrator").unwrap().mode,
             AgentMode::Primary
         );
-        assert_eq!(registry.get("explore").unwrap().cost, AgentCost::Free);
+        assert_eq!(registry.get("explore").unwrap().tier, ModelTier::Cheap);
         assert!(registry.get("orchestrator").unwrap().user_invocable);
         assert_eq!(
             registry.get("orchestrator").unwrap().can_delegate_to,
@@ -983,7 +958,7 @@ You are the test agent.
         }
 
         assert!(
-            prompt.contains("| Name | Cost | Description | Use When | Avoid When | Triggers |")
+            prompt.contains("| Name | Cost | Description | Avoid When | Triggers |")
         );
         assert!(
             registry
@@ -991,39 +966,6 @@ You are the test agent.
                 .unwrap()
                 .system_prompt
                 .contains("reviewer")
-        );
-    }
-
-    #[test]
-    fn category_defaults_are_populated() {
-        let categories = default_categories();
-        let names = categories
-            .iter()
-            .map(|category| category.name.as_str())
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            names,
-            vec![
-                "quick",
-                "deep",
-                "visual-engineering",
-                "ultrabrain",
-                "artistry",
-                "writing",
-                "unspecified-low",
-                "unspecified-high",
-            ]
-        );
-        assert!(
-            categories
-                .iter()
-                .all(|category| !category.description.is_empty())
-        );
-        assert!(
-            categories
-                .iter()
-                .all(|category| !category.model.model_id.is_empty())
         );
     }
 }

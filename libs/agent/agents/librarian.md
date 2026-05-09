@@ -8,8 +8,6 @@ config:
   tier: standard
   max_turns: 40
   temperature: 0.2
-use_when:
-  - You need official docs, API references, or web research outside the repository.
 avoid_when:
   - The answer can be found directly in the local codebase.
   - The delegated task requires code edits rather than research.

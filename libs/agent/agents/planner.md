@@ -9,8 +9,6 @@ config:
   max_turns: 80
   temperature: 0.1
   effort: high
-use_when:
-  - The user asks for a plan before implementation.
 avoid_when:
   - The task should be implemented directly instead of planned in detail.
 ---

@@ -9,9 +9,6 @@ config:
   max_turns: 50
   temperature: 0.1
   effort: high
-use_when:
-  - You need architectural guidance, debugging analysis, or a second opinion.
-  - The task benefits from read-only reasoning before implementation.
 avoid_when:
   - The delegated task requires editing files or executing changes.
 triggers:

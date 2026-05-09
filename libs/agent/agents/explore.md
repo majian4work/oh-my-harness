@@ -9,8 +9,6 @@ config:
   max_turns: 30
   temperature: 0.0
   effort: low
-use_when:
-  - You need fast local codebase search, file discovery, or lightweight context gathering.
 avoid_when:
   - You need external documentation, web research, or implementation changes.
   - The task requires deep architectural judgment rather than lookup.

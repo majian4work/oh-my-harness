@@ -9,9 +9,6 @@ config:
   max_turns: 60
   temperature: 0.2
   permission_level: WorkspaceWrite
-use_when:
-  - A delegated task needs focused execution or code changes.
-  - The work fits a category-specific worker better than a specialist agent.
 avoid_when:
   - You only need high-level advice, planning, or review.
   - The task is primarily about external documentation or web research.

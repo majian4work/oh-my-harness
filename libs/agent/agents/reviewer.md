@@ -8,8 +8,6 @@ config:
   tier: premium
   max_turns: 50
   temperature: 0.1
-use_when:
-  - Implementation work needs QA, validation, or a review pass.
 avoid_when:
   - The task is still in the planning or implementation phase.
 triggers:
