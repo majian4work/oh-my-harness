@@ -75,15 +75,8 @@ impl SkillRegistry {
     }
 
     fn register_builtins(&mut self) {
-        let builtins: &[(&str, &str)] = &[(
-            "update-best-models",
-            include_str!("../skills/update-best-models.md"),
-        )];
-        for (name, content) in builtins {
-            if let Ok(skill) = parse_skill_content(name, content) {
-                self.register(skill);
-            }
-        }
+        // No builtin skills currently. User skills go in
+        // ~/.config/omh/skills/ or .omh/skills/
     }
 
     fn discover_dir(&mut self, dir: &Path) -> Result<()> {

@@ -12,7 +12,7 @@ use runtime::Harness;
 use tracing::Level;
 
 use crate::{
-    commands::{cmd_auth, cmd_evolution, cmd_memory, cmd_sessions, cmd_update_best_models},
+    commands::{cmd_auth, cmd_evolution, cmd_memory, cmd_sessions},
     run::run_oneshot,
     tui::run_tui,
 };
@@ -123,11 +123,6 @@ enum Mode {
     /// Evolution management
     #[command(subcommand)]
     Evolution(EvolutionCmd),
-    /// Refresh model cache and optimize agent model assignments
-    UpdateBestModels {
-        #[arg(short, long)]
-        global: bool,
-    },
 }
 
 #[tokio::main]
@@ -157,7 +152,6 @@ async fn main() -> Result<()> {
                 Mode::Memory(cmd) => cmd_memory(cmd).await,
                 Mode::Evolution(cmd) => cmd_evolution(cmd).await,
                 Mode::Auth(cmd) => cmd_auth(cmd).await,
-                Mode::UpdateBestModels { global } => cmd_update_best_models(global).await,
             }
         }
     }

@@ -138,7 +138,7 @@ enum SuggestionTrigger {
 }
 
 enum AppAction {
-    LoadModels { force_refresh: bool },
+    LoadModels,
 }
 
 struct ChatMessage {
@@ -518,9 +518,19 @@ impl App {
                 needs_arg: false,
             },
             Suggestion {
-                label: "/models refresh".into(),
-                description: "Refresh model cache".into(),
+                label: "/agents".into(),
+                description: "List available agents".into(),
                 needs_arg: false,
+            },
+            Suggestion {
+                label: "/agent".into(),
+                description: "Switch foreground agent".into(),
+                needs_arg: true,
+            },
+            Suggestion {
+                label: "/effort".into(),
+                description: "Set effort level (low/default/high)".into(),
+                needs_arg: true,
             },
             Suggestion {
                 label: "/evolution log".into(),
@@ -532,16 +542,6 @@ impl App {
                 description: "Consolidate learnings".into(),
                 needs_arg: false,
             },
-            Suggestion {
-                label: "/skills".into(),
-                description: "List available skills".into(),
-                needs_arg: false,
-            },
-            Suggestion {
-                label: "/skill".into(),
-                description: "Show skill content".into(),
-                needs_arg: true,
-            },
         ];
 
         let workspace_root = std::env::current_dir().unwrap_or_default();
@@ -550,7 +550,7 @@ impl App {
                 items.push(Suggestion {
                     label: format!("/{}", s.name),
                     description: s.description.clone(),
-                    needs_arg: false,
+                    needs_arg: true,
                 });
             }
         }
@@ -794,6 +794,68 @@ impl App {
             let _ = config.save_to(&OmhConfig::project_path(&cwd));
         }
         Ok(())
+    }
+
+    /// Run a skill-augmented turn: inject skill content as instructions, execute with prompt.
+    fn start_skill_turn(&mut self, skill_name: String, prompt: String) {
+        if self.is_streaming {
+            self.messages.push(ChatMessage::new(
+                "system",
+                "Wait for the current response to finish streaming.".to_string(),
+            ));
+            return;
+        }
+
+        let Some(harness) = self.harness.clone() else { return };
+        let Some(session_id) = self.session_id.clone() else { return };
+
+        let workspace_root = std::env::current_dir().unwrap_or_default();
+        let registry = skill::SkillRegistry::load(&workspace_root)
+            .unwrap_or_else(|_| skill::SkillRegistry::new());
+        let Some(skill) = registry.get(&skill_name).cloned() else {
+            self.messages.push(ChatMessage::new(
+                "system",
+                format!("Skill '{skill_name}' not found."),
+            ));
+            return;
+        };
+
+        let display_text = format!("/{skill_name} {prompt}");
+        self.input_tokens = 0;
+        self.output_tokens = 0;
+        self.streaming_text.clear();
+        self.is_streaming = true;
+        self.turn_start = Some(Instant::now());
+        self.messages.push(ChatMessage::new("user", display_text));
+        let mut assistant_msg = ChatMessage::new("assistant", String::new());
+        assistant_msg.started_at = Some(Local::now().format("%H:%M:%S").to_string());
+        self.messages.push(assistant_msg);
+
+        let model_override = ModelSpec {
+            model_id: self.model_id.clone(),
+            provider_id: Some(self.provider_id.clone()),
+        };
+        let effort_override = if self.effort == provider::Effort::Default {
+            None
+        } else {
+            Some(self.effort)
+        };
+
+        tokio::spawn(async move {
+            let mut sr = SessionRuntime::new(session_id.clone(), harness.clone());
+            let result = sr
+                .run_skill_turn(&skill.content, &prompt, model_override, effort_override)
+                .await;
+            if let Err(error) = result {
+                harness.bus.publish(bus::AgentEvent::Error {
+                    session_id: Some(session_id.clone()),
+                    message: error.to_string(),
+                });
+            }
+            harness
+                .bus
+                .publish(bus::AgentEvent::TurnComplete { session_id });
+        });
     }
 
     fn start_agent_turn(&mut self, text: String) {
@@ -1604,8 +1666,8 @@ impl App {
                             Ok(SlashResult::Notify(msg)) => {
                                 self.messages.push(ChatMessage::new("system", msg));
                             }
-                            Ok(SlashResult::ListModels { force_refresh }) => {
-                                return Some(AppAction::LoadModels { force_refresh });
+                            Ok(SlashResult::ListModels) => {
+                                return Some(AppAction::LoadModels);
                             }
                             Ok(SlashResult::ListAgents) => {
                                 // List primary agents in message panel
@@ -1664,6 +1726,9 @@ impl App {
                                         format!("✓ Effort set to {level:?}"),
                                     ));
                                 }
+                            }
+                            Ok(SlashResult::RunSkill { skill_name, prompt }) => {
+                                self.start_skill_turn(skill_name, prompt);
                             }
                             Err(e) => {
                                 self.messages
@@ -2332,7 +2397,10 @@ impl App {
         ];
         if !effort_label.is_empty() {
             footer_spans.push(Span::styled(sep, Style::default().fg(palette::BORDER)));
-            footer_spans.push(Span::styled(effort_label, Style::default().fg(palette::YELLOW)));
+            footer_spans.push(Span::styled(
+                effort_label,
+                Style::default().fg(palette::YELLOW),
+            ));
         }
         let footer_title = Line::from(footer_spans);
 
@@ -2516,7 +2584,7 @@ impl App {
     }
 }
 
-async fn fetch_models(force_refresh: bool) -> Result<Vec<(String, Vec<ModelInfo>)>> {
+async fn fetch_models() -> Result<Vec<(String, Vec<ModelInfo>)>> {
     let mut harness = crate::init_harness()?;
     crate::run::register_providers_from_env(&mut harness)?;
 
@@ -2528,11 +2596,9 @@ async fn fetch_models(force_refresh: bool) -> Result<Vec<(String, Vec<ModelInfo>
         .collect();
     let id_refs: Vec<&str> = provider_ids.iter().map(|s| s.as_str()).collect();
 
-    if !force_refresh {
-        let cache = crate::auth::ModelsCache::load();
-        if let Some(cached) = cache.get_all(&id_refs) {
-            return Ok(cached);
-        }
+    let cache = crate::auth::ModelsCache::load();
+    if let Some(cached) = cache.get_all(&id_refs) {
+        return Ok(cached);
     }
 
     let models = harness.provider_registry.list_all_models_validated().await;
@@ -2677,13 +2743,13 @@ pub async fn run_tui(continue_last: bool, resume_pick: bool) -> Result<()> {
                         Event::Key(key) => {
                             if let Some(action) = app.handle_key(key) {
                                 match action {
-                                    AppAction::LoadModels { force_refresh } => {
+                                    AppAction::LoadModels => {
                                         app.loading_models = true;
                                         app.messages.push(ChatMessage::new(
                                             "system",
-                                            if force_refresh { "Refreshing models..." } else { "Loading models..." }.to_string(),
+                                            "Loading models...".to_string(),
                                         ));
-                                        models_task = Some(tokio::spawn(fetch_models(force_refresh)));
+                                        models_task = Some(tokio::spawn(fetch_models()));
                                     }
                                 }
                             }

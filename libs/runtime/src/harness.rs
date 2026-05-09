@@ -173,50 +173,6 @@ impl Harness {
         overrides
     }
 
-    pub fn write_agent_overrides(
-        workspace_root: &Path,
-        overrides: &HashMap<String, AgentOverride>,
-        global: bool,
-    ) -> Result<()> {
-        let config_path = if global {
-            dirs::config_dir().join("config.toml")
-        } else {
-            workspace_root.join(".omh/config.toml")
-        };
-
-        let mut config: toml::Value = if let Ok(content) = std::fs::read_to_string(&config_path) {
-            toml::from_str(&content).unwrap_or(toml::Value::Table(Default::default()))
-        } else {
-            toml::Value::Table(Default::default())
-        };
-
-        let mut agents_table = toml::map::Map::new();
-        for (name, ov) in overrides {
-            let mut entry = toml::map::Map::new();
-            if let Some(model) = &ov.model {
-                entry.insert("model".to_string(), toml::Value::String(model.clone()));
-            }
-            if let Some(provider) = &ov.provider {
-                entry.insert(
-                    "provider".to_string(),
-                    toml::Value::String(provider.clone()),
-                );
-            }
-            agents_table.insert(name.clone(), toml::Value::Table(entry));
-        }
-
-        if let Some(table) = config.as_table_mut() {
-            table.insert("agents".to_string(), toml::Value::Table(agents_table));
-        }
-
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let content = toml::to_string_pretty(&config)?;
-        std::fs::write(&config_path, content)?;
-        Ok(())
-    }
-
     fn builtin_mcp_servers() -> HashMap<String, McpServerConfig> {
         let mut servers = HashMap::new();
         servers.insert(
@@ -344,7 +300,6 @@ mod tests {
         assert!(dirs::sessions_dir().exists());
         assert!(temp_dir.join(".omh/memory").exists());
         assert!(harness.agent_registry.get("orchestrator").is_some());
-        assert!(harness.skill_registry.get("update-best-models").is_some());
         assert!(harness.tool_registry.get_spec("skill").is_some());
         assert!(harness.tool_registry.get_spec("spawn_agent").is_some());
         assert!(harness.provider_registry.list().is_empty());

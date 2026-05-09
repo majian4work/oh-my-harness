@@ -57,6 +57,29 @@ impl SessionRuntime {
         model_override: ModelSpec,
         effort_override: Option<Effort>,
     ) -> Result<TurnResult> {
+        self.execute_turn(input, model_override, effort_override, None)
+            .await
+    }
+
+    /// Run a turn with skill instructions injected before the user's prompt.
+    pub async fn run_skill_turn(
+        &mut self,
+        skill_content: &str,
+        prompt: &str,
+        model_override: ModelSpec,
+        effort_override: Option<Effort>,
+    ) -> Result<TurnResult> {
+        self.execute_turn(prompt, model_override, effort_override, Some(skill_content))
+            .await
+    }
+
+    async fn execute_turn(
+        &mut self,
+        input: &str,
+        model_override: ModelSpec,
+        effort_override: Option<Effort>,
+        skill_context: Option<&str>,
+    ) -> Result<TurnResult> {
         let agent_name = self.foreground_agent().to_string();
         let max_turns = self
             .harness
@@ -72,7 +95,15 @@ impl SessionRuntime {
         runtime.shared_harness = Some(self.harness.clone());
         runtime.current_turn = self.state.turn_counter;
 
-        let result = runtime.run_turn(&self.harness, input).await;
+        let effective_input = if let Some(skill) = skill_context {
+            format!(
+                "<skill_instructions>\n{skill}\n</skill_instructions>\n\n{input}"
+            )
+        } else {
+            input.to_string()
+        };
+
+        let result = runtime.run_turn(&self.harness, &effective_input).await;
 
         // Persist updated turn counter regardless of success/failure.
         self.state.turn_counter = runtime.current_turn;
