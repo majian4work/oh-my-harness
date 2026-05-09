@@ -201,7 +201,7 @@ impl App {
         let mut harness = crate::init_harness()?;
         crate::run::register_providers_from_env(&mut harness)?;
         let workspace_root = std::env::current_dir().unwrap_or_default();
-        let defaults = runtime::config::resolve_defaults(&harness, &workspace_root);
+        let defaults = crate::config::resolve_defaults(&harness, &workspace_root);
         let provider_id = defaults.provider_id;
         let model_id = defaults.model_id;
         let effort = defaults.effort;

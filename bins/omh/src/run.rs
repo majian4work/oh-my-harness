@@ -19,7 +19,7 @@ pub async fn run_oneshot(
     register_providers_from_env(&mut harness)?;
 
     let workspace_root = std::env::current_dir()?;
-    let defaults = runtime::config::resolve_defaults(&harness, &workspace_root);
+    let defaults = crate::config::resolve_defaults(&harness, &workspace_root);
 
     harness.connect_mcp_servers(&workspace_root);
 
