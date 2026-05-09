@@ -5,7 +5,6 @@ use anyhow::Result;
 use crate::tui::input_ast::SlashInvocation;
 
 pub enum SlashResult {
-    Response(String),
     Notify(String),
     ListModels,
     ListAgents,
@@ -27,7 +26,6 @@ pub fn dispatch(invocation: &SlashInvocation, workspace_root: &Path) -> Result<S
         "agents" => Ok(SlashResult::ListAgents),
         "effort" => dispatch_effort(args),
         "notifications" => Ok(SlashResult::ListNotifications),
-        "evolution" | "evolve" => dispatch_evolution(args),
         _ => {
             let registry = skill::SkillRegistry::load(workspace_root)
                 .unwrap_or_else(|_| skill::SkillRegistry::new());
@@ -43,27 +41,6 @@ pub fn dispatch(invocation: &SlashInvocation, workspace_root: &Path) -> Result<S
             }
             Ok(SlashResult::Notify(format!("Unknown command: /{cmd}")))
         }
-    }
-}
-
-fn dispatch_evolution(args: &str) -> Result<SlashResult> {
-    match args {
-        "" => Ok(SlashResult::Notify(
-            "Usage: /evolution <log|consolidate|pause|resume>".to_string(),
-        )),
-        "log" => Ok(SlashResult::Response(
-            "Evolution log: not yet connected to runtime.\nUse `omh evolution log` from CLI."
-                .to_string(),
-        )),
-        "consolidate" => Ok(SlashResult::Response(
-            "Evolution consolidate: not yet connected to runtime.\nUse `omh evolution consolidate` from CLI."
-                .to_string(),
-        )),
-        "pause" => Ok(SlashResult::Notify("Evolution paused.".to_string())),
-        "resume" => Ok(SlashResult::Notify("Evolution resumed.".to_string())),
-        other => Ok(SlashResult::Notify(format!(
-            "Unknown evolution command: {other}\nAvailable: log, consolidate, pause, resume"
-        ))),
     }
 }
 

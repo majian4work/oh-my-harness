@@ -513,16 +513,6 @@ impl App {
                 description: "Set effort level (low/default/high)".into(),
                 needs_arg: true,
             },
-            Suggestion {
-                label: "/evolution log".into(),
-                description: "Show evolution history".into(),
-                needs_arg: false,
-            },
-            Suggestion {
-                label: "/evolution consolidate".into(),
-                description: "Consolidate learnings".into(),
-                needs_arg: false,
-            },
         ];
 
         let workspace_root = std::env::current_dir().unwrap_or_default();
@@ -1352,10 +1342,8 @@ impl App {
     fn switch_foreground_agent(&mut self, name: &str) {
         let Some(harness) = &self.harness else { return };
         if harness.agent_registry.get(name).is_none() {
-            self.messages.push(ChatMessage::new(
-                "system",
-                format!("Unknown agent: {name}"),
-            ));
+            self.messages
+                .push(ChatMessage::new("system", format!("Unknown agent: {name}")));
             return;
         }
         self.foreground_agent = name.to_string();
@@ -1765,11 +1753,6 @@ impl App {
                     match resolver.resolve(&text) {
                         Ok(input_ast::SubmitIntent::Slash(invocation)) => {
                             match slash::dispatch(&invocation, &workspace_root) {
-                                Ok(SlashResult::Response(response)) => {
-                                    self.messages.push(ChatMessage::new("user", text));
-                                    self.messages.push(ChatMessage::new("system", response));
-                                    self.refresh_status();
-                                }
                                 Ok(SlashResult::Notify(msg)) => {
                                     self.messages.push(ChatMessage::new("system", msg));
                                 }

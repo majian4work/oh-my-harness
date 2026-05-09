@@ -75,7 +75,11 @@ pub fn init_harness() -> Result<Harness> {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "omh", about = "The orchestration framework for AI agents", disable_help_subcommand = true)]
+#[command(
+    name = "omh",
+    about = "The orchestration framework for AI agents",
+    disable_help_subcommand = true
+)]
 struct Args {
     #[command(subcommand)]
     mode: Option<Mode>,

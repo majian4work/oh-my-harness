@@ -375,14 +375,18 @@ impl AgentRuntime {
             let candidates =
                 memory::recall_candidates(harness.memory.as_ref(), &memory_scopes, input, 20)
                     .await?;
+            let filtered: Vec<_> = candidates
+                .into_iter()
+                .filter(|e| harness.evolution.should_inject(e))
+                .collect();
 
-            if candidates.len() > 5 {
+            if filtered.len() > 5 {
                 let ranked = self
-                    .rerank_memories(provider, &model_id, input, &candidates)
+                    .rerank_memories(provider, &model_id, input, &filtered)
                     .await;
                 memory::format_memories(&ranked, 512)
             } else {
-                memory::format_memories(&candidates, 512)
+                memory::format_memories(&filtered, 512)
             }
         };
         let skill_injection = harness.skill_registry.inject_for_context(&[]);

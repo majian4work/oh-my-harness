@@ -474,55 +474,6 @@ impl MarkdownMemoryLoader {
     }
 }
 
-pub async fn recall_for_prompt(
-    store: &dyn MemoryStore,
-    scopes: &[Scope],
-    query: &str,
-    token_budget: usize,
-) -> Result<String> {
-    let mut ranked = Vec::new();
-    let recall_limit = scopes.len().max(1) * 20;
-
-    for scope in scopes {
-        for (position, entry) in store
-            .recall(query, scope, recall_limit)
-            .await?
-            .into_iter()
-            .enumerate()
-        {
-            let relevance_position = 1.0 / (position as f32 + 1.0);
-            let score = entry.confidence * relevance_position;
-            ranked.push((score, entry));
-        }
-    }
-
-    ranked.sort_by(|left, right| {
-        right
-            .0
-            .partial_cmp(&left.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let mut seen = HashSet::new();
-    let mut output = String::from("## Memories\n\n");
-    let max_chars = token_budget.saturating_mul(4);
-
-    for (_, entry) in ranked {
-        let hash = stable_hash(entry.content.as_bytes());
-        if !seen.insert(hash) {
-            continue;
-        }
-
-        let line = format!("- [{:?}/{:?}] {}\n", entry.scope, entry.kind, entry.content);
-        if output.len() + line.len() > max_chars && output.len() > "## Memories\n\n".len() {
-            break;
-        }
-        output.push_str(&line);
-    }
-
-    Ok(output)
-}
-
 pub async fn recall_candidates(
     store: &dyn MemoryStore,
     scopes: &[Scope],
