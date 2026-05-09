@@ -40,6 +40,22 @@ type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 const DEFAULT_AGENT: &str = "orchestrator";
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/// Parse `@agent_name prompt text` from user input.
+/// Returns (Some(agent_name), prompt) if matched, or (None, original_text) otherwise.
+fn parse_at_agent(input: &str) -> (Option<String>, String) {
+    let trimmed = input.trim_start();
+    if let Some(rest) = trimmed.strip_prefix('@') {
+        if let Some(space_pos) = rest.find(|c: char| c.is_whitespace()) {
+            let agent = rest[..space_pos].to_string();
+            let prompt = rest[space_pos..].trim().to_string();
+            if !agent.is_empty() && !prompt.is_empty() {
+                return (Some(agent), prompt);
+            }
+        }
+    }
+    (None, input.to_string())
+}
+
 /// Compact summary of tool call arguments for display.
 fn compact_tool_args(args_json: &str) -> String {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(args_json) else {
@@ -782,6 +798,20 @@ impl App {
             return;
         };
 
+        // Parse @agent_name prefix: "@explore find all Cargo.toml" → agent="explore", prompt="find all Cargo.toml"
+        let (target_agent, prompt) = parse_at_agent(&text);
+
+        // Validate @agent target if specified
+        if let Some(ref agent) = target_agent {
+            if harness.agent_registry.get(agent).is_none() {
+                self.messages.push(ChatMessage::new(
+                    "system",
+                    format!("Unknown agent: @{agent}"),
+                ));
+                return;
+            }
+        }
+
         self.input_tokens = 0;
         self.output_tokens = 0;
         self.streaming_text.clear();
@@ -793,31 +823,137 @@ impl App {
         self.messages.push(assistant_msg);
         self.refresh_status();
 
-        let agent_name = DEFAULT_AGENT.to_string();
         let model_override = ModelSpec {
             model_id: self.model_id.clone(),
             provider_id: Some(self.provider_id.clone()),
         };
-        let max_turns = harness
-            .agent_registry
-            .get(DEFAULT_AGENT)
-            .and_then(|agent| agent.max_turns)
-            .unwrap_or(30);
-        tokio::spawn(async move {
-            let runtime = AgentRuntime::new(agent_name, session_id.clone(), max_turns);
-            let mut runtime = runtime.with_logger(&harness);
-            runtime.model_override = Some(model_override);
-            runtime.shared_harness = Some(harness.clone());
-            if let Err(error) = runtime.run_turn(&harness, &text).await {
-                harness.bus.publish(bus::AgentEvent::Error {
-                    session_id: Some(session_id.clone()),
-                    message: error.to_string(),
+
+        if let Some(target_agent) = target_agent {
+            // @agent spawn: run target agent as depth=1 (leaf-only), log to parent session
+            let max_turns = harness
+                .agent_registry
+                .get(&target_agent)
+                .and_then(|a| a.max_turns)
+                .unwrap_or(30);
+            tokio::spawn(async move {
+                // Log user message + spawn_agent tool_use to parent session
+                let tool_call_id = format!("tc-{}", ulid::Ulid::new());
+                let user_msg = message::Message::user(
+                    format!("msg-{}", ulid::Ulid::new()),
+                    &text,
+                );
+                let _ = harness.session_manager.append_message(&session_id, &user_msg);
+
+                let spawn_input = serde_json::json!({
+                    "agent_name": target_agent,
+                    "prompt": prompt,
+                    "background": false,
+                    "source": "user_at_mention",
                 });
-                harness
-                    .bus
-                    .publish(bus::AgentEvent::TurnComplete { session_id });
-            }
-        });
+                let tool_use_msg = message::Message {
+                    id: format!("msg-{}", ulid::Ulid::new()),
+                    role: message::Role::Assistant,
+                    parts: vec![message::ContentPart::ToolUse {
+                        id: tool_call_id.clone(),
+                        name: "spawn_agent".to_string(),
+                        input: spawn_input,
+                    }],
+                    created_at: message::now_millis(),
+                };
+                let _ = harness.session_manager.append_message(&session_id, &tool_use_msg);
+
+                // Create child session and run agent at depth=1
+                let workspace_root = harness.session_manager
+                    .get(&session_id)
+                    .map(|s| s.workspace_root)
+                    .unwrap_or_default();
+                let child_session = harness
+                    .session_manager
+                    .create_subagent_session(&session_id, &target_agent, "", &workspace_root)
+                    .map(|s| s.id)
+                    .unwrap_or_else(|_| format!("{session_id}:{target_agent}"));
+
+                harness.bus.publish(bus::AgentEvent::SubagentSpawned {
+                    parent_id: session_id.clone(),
+                    child_id: child_session.clone(),
+                    agent: target_agent.clone(),
+                });
+
+                let mut runtime = AgentRuntime::new(
+                    target_agent.clone(),
+                    child_session.clone(),
+                    max_turns,
+                );
+                runtime = runtime.with_logger(&harness);
+                runtime.model_override = Some(model_override);
+                runtime.interactive = false;
+                runtime.depth = 1;
+
+                let result = runtime.run_turn(&harness, &prompt).await;
+
+                // Log tool_result back to parent session
+                let (result_text, is_error) = match &result {
+                    Ok(r) => (r.response.clone(), false),
+                    Err(e) => (format!("Agent '{target_agent}' failed: {e}"), true),
+                };
+
+                let tool_result_msg = message::Message {
+                    id: format!("msg-{}", ulid::Ulid::new()),
+                    role: message::Role::User,
+                    parts: vec![message::ContentPart::ToolResult {
+                        id: tool_call_id,
+                        content: result_text.clone(),
+                        is_error,
+                    }],
+                    created_at: message::now_millis(),
+                };
+                let _ = harness.session_manager.append_message(&session_id, &tool_result_msg);
+
+                if is_error {
+                    harness.bus.publish(bus::AgentEvent::SubagentFailed {
+                        child_id: child_session,
+                        error: result_text.clone(),
+                    });
+                } else {
+                    harness.bus.publish(bus::AgentEvent::SubagentCompleted {
+                        child_id: child_session,
+                        result: result_text.clone(),
+                    });
+                }
+
+                // Stream the result back as if it were an assistant response
+                harness.bus.publish(bus::AgentEvent::StreamDelta {
+                    session_id: session_id.clone(),
+                    text: result_text,
+                });
+                harness.bus.publish(bus::AgentEvent::TurnComplete {
+                    session_id,
+                });
+            });
+        } else {
+            // Normal flow: run default foreground agent
+            let agent_name = DEFAULT_AGENT.to_string();
+            let max_turns = harness
+                .agent_registry
+                .get(DEFAULT_AGENT)
+                .and_then(|agent| agent.max_turns)
+                .unwrap_or(30);
+            tokio::spawn(async move {
+                let runtime = AgentRuntime::new(agent_name, session_id.clone(), max_turns);
+                let mut runtime = runtime.with_logger(&harness);
+                runtime.model_override = Some(model_override);
+                runtime.shared_harness = Some(harness.clone());
+                if let Err(error) = runtime.run_turn(&harness, &text).await {
+                    harness.bus.publish(bus::AgentEvent::Error {
+                        session_id: Some(session_id.clone()),
+                        message: error.to_string(),
+                    });
+                    harness
+                        .bus
+                        .publish(bus::AgentEvent::TurnComplete { session_id });
+                }
+            });
+        }
     }
 
     fn generate_session_title(&self) {
@@ -1441,7 +1577,8 @@ impl App {
                             Ok(SlashResult::ListAgents) => {
                                 // List primary agents in message panel
                                 if let Some(harness) = &self.harness {
-                                    let agents = harness.agent_registry.explicit_invocation_candidates();
+                                    let agents =
+                                        harness.agent_registry.explicit_invocation_candidates();
                                     let list = agents
                                         .iter()
                                         .map(|a| format!("  {}: {}", a.name, a.description))

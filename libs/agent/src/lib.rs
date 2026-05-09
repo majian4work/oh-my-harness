@@ -878,9 +878,7 @@ You are the test agent.
         // orchestrator should not list itself
         assert!(!prompt.contains("| orchestrator |"));
 
-        assert!(
-            prompt.contains("| Name | Tier | Description | Avoid When | Triggers |")
-        );
+        assert!(prompt.contains("| Name | Tier | Description | Avoid When | Triggers |"));
         assert!(
             registry
                 .get("orchestrator")

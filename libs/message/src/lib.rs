@@ -121,7 +121,7 @@ pub fn estimate_messages_tokens(msgs: &[Message]) -> usize {
     msgs.iter().map(estimate_message_tokens).sum()
 }
 
-fn now_millis() -> i64 {
+pub fn now_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
