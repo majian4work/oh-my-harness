@@ -344,6 +344,7 @@ impl AgentRuntime {
 
         let session = harness.session_manager.get(&self.session_id)?;
         let dump_dir = harness.session_manager.dump_dir(&self.session_id);
+        let dump_offset = max_dump_turn(&dump_dir, &executing_agent_name);
 
         let memory_scopes = vec![
             Scope::Agent(executing_agent_name.clone()),
@@ -466,7 +467,7 @@ impl AgentRuntime {
             dump_turn(
                 &dump_dir,
                 &executing_agent_name,
-                self.current_turn,
+                self.current_turn + dump_offset,
                 "request",
                 &request,
             );
@@ -637,7 +638,7 @@ impl AgentRuntime {
             dump_turn(
                 &dump_dir,
                 &executing_agent_name,
-                self.current_turn,
+                self.current_turn + dump_offset,
                 "response",
                 &assistant_msg,
             );
@@ -825,7 +826,7 @@ impl AgentRuntime {
             dump_turn(
                 &dump_dir,
                 &executing_agent_name,
-                self.current_turn,
+                self.current_turn + dump_offset,
                 "tool_results",
                 &tool_result_msg,
             );
@@ -1248,6 +1249,24 @@ fn sanitize_messages(messages: &mut Vec<Message>) {
             messages.remove(idx);
         }
     }
+}
+
+fn max_dump_turn(dump_dir: &PathBuf, agent_name: &str) -> u32 {
+    let agent_dir = dump_dir.join(agent_name);
+    std::fs::read_dir(&agent_dir)
+        .ok()
+        .and_then(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter_map(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    name.strip_prefix("turn_")
+                        .and_then(|s| s.get(..3))
+                        .and_then(|s| s.parse::<u32>().ok())
+                })
+                .max()
+        })
+        .unwrap_or(0)
 }
 
 fn dump_turn(
