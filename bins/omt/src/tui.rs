@@ -18,6 +18,8 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
 
+use a2a::TeamMember;
+
 use crate::events::{OmtBus, OmtEvent, RunState};
 use crate::planner;
 use crate::scheduler;
@@ -95,10 +97,20 @@ struct App {
 
     /// Team manager (if A2A server is running)
     team: Option<TeamManager>,
-    /// Cached member count (refreshed each tick)
-    member_count: usize,
+    /// Cached team members (refreshed each tick)
+    members: Vec<TeamMember>,
+    /// Cached recent runs (refreshed on phase change)
+    recent_runs: Vec<RecentRun>,
 
     should_quit: bool,
+}
+
+/// Lightweight summary of a past run for the dashboard.
+struct RecentRun {
+    run_id: String,
+    state: String,
+    completed: usize,
+    total: usize,
 }
 
 #[derive(PartialEq)]
@@ -131,8 +143,30 @@ impl App {
             run_state: RunState::Planned,
             spinner_idx: 0,
             team,
-            member_count: 0,
+            members: Vec::new(),
+            recent_runs: Vec::new(),
             should_quit: false,
+        }
+    }
+
+    fn refresh_recent_runs(&mut self) {
+        self.recent_runs.clear();
+        if let Ok(runs) = state::list_runs() {
+            for run_id in runs.into_iter().take(5) {
+                if let Ok(rs) = state::load_state(&run_id) {
+                    let total = rs.graph.tasks.len();
+                    let completed = rs.graph.summary()
+                        .get(&TaskState::Completed)
+                        .copied()
+                        .unwrap_or(0);
+                    self.recent_runs.push(RecentRun {
+                        run_id,
+                        state: rs.state.to_string(),
+                        completed,
+                        total,
+                    });
+                }
+            }
         }
     }
 
@@ -276,6 +310,7 @@ async fn run_app(terminal: &mut AppTerminal, concurrency: usize, team: Option<Te
     }
 
     let mut app = App::new(team.clone());
+    app.refresh_recent_runs();
     let bus = OmtBus::new();
     let mut event_rx = bus.subscribe();
 
@@ -312,6 +347,9 @@ async fn run_app(terminal: &mut AppTerminal, concurrency: usize, team: Option<Te
                 } else {
                     match &app.phase {
                         AppPhase::Input => match key.code {
+                            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                app.should_quit = true;
+                            }
                             KeyCode::Enter => {
                                 let prompt = app.input.trim().to_string();
                                 if !prompt.is_empty() {
@@ -381,9 +419,6 @@ async fn run_app(terminal: &mut AppTerminal, concurrency: usize, team: Option<Te
                                     }
                                 }
                             }
-                            KeyCode::Esc => {
-                                app.should_quit = true;
-                            }
                             _ => {}
                         },
                         AppPhase::PlanReview => match key.code {
@@ -435,6 +470,7 @@ async fn run_app(terminal: &mut AppTerminal, concurrency: usize, team: Option<Te
                                 app.task_order.clear();
                                 app.tasks.clear();
                                 app.run_id = None;
+                                app.refresh_recent_runs();
                             }
                             KeyCode::Esc | KeyCode::Char('q') => {
                                 app.should_quit = true;
@@ -462,11 +498,11 @@ async fn run_app(terminal: &mut AppTerminal, concurrency: usize, team: Option<Te
             }
         }
 
-        // Update spinner & member count
+        // Update spinner & team members
         app.spinner_idx = app.spinner_idx.wrapping_add(1);
         if let Some(ref tm) = app.team {
             let status = tm.status().await;
-            app.member_count = status.members.len();
+            app.members = status.members;
         }
 
         if app.should_quit {
@@ -539,7 +575,13 @@ fn draw_ui(f: &mut Frame, app: &App) {
 
     match &app.phase {
         AppPhase::Input => {
-            draw_input_prompt(f, app, chunks[1]);
+            let body = Layout::vertical([
+                Constraint::Length(3),
+                Constraint::Min(5),
+            ])
+            .split(chunks[1]);
+            draw_input_prompt(f, app, body[0]);
+            draw_dashboard(f, app, body[1]);
             draw_input_footer(f, chunks[2]);
         }
         AppPhase::PlanReview => {
@@ -575,10 +617,10 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 
     let title = match &app.phase {
         AppPhase::Input => {
-            if app.team.is_some() && app.member_count == 0 {
+            if app.team.is_some() && app.members.is_empty() {
                 " omt — oh-my-team  ⚠ no agents connected ".to_string()
-            } else if app.member_count > 0 {
-                format!(" omt — oh-my-team  {} agent(s) online ", app.member_count)
+            } else if !app.members.is_empty() {
+                format!(" omt — oh-my-team  {} agent(s) online ", app.members.len())
             } else {
                 " omt — oh-my-team ".to_string()
             }
@@ -593,7 +635,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    let border_color = if app.phase == AppPhase::Input && app.team.is_some() && app.member_count == 0 {
+    let border_color = if app.phase == AppPhase::Input && app.team.is_some() && app.members.is_empty() {
         palette::YELLOW
     } else {
         palette::ACCENT
@@ -631,12 +673,10 @@ fn draw_input_prompt(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Vertically center the input
-    let y_offset = inner.height / 2;
     let input_area = Rect {
-        x: inner.x + 2,
-        y: inner.y + y_offset,
-        width: inner.width.saturating_sub(4),
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(2),
         height: 1,
     };
 
@@ -657,11 +697,112 @@ fn draw_input_prompt(f: &mut Frame, app: &App, area: Rect) {
 
     f.render_widget(Paragraph::new(Line::from(display)), input_area);
 
-    // Cursor — compute display width of the text before cursor
+    // Cursor
     if app.phase == AppPhase::Input {
         let prefix: String = app.input.chars().take(app.cursor_pos).collect();
         let display_offset = prefix.width() as u16;
         f.set_cursor_position((input_area.x + 2 + display_offset, input_area.y));
+    }
+}
+
+fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
+    // Split dashboard: left = team members, right = recent runs
+    let cols = Layout::horizontal([
+        Constraint::Percentage(50),
+        Constraint::Percentage(50),
+    ])
+    .split(area);
+
+    // ── Team Members ──
+    let team_block = Block::default()
+        .title(" Team Members ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(palette::BORDER))
+        .style(Style::default().bg(palette::SURFACE));
+
+    let team_inner = team_block.inner(cols[0]);
+    f.render_widget(team_block, cols[0]);
+
+    if app.members.is_empty() {
+        let hint = if app.team.is_some() {
+            "Waiting for agents to connect...\n\nRun `omh` instances to join this team."
+        } else {
+            "A2A server not started."
+        };
+        let p = Paragraph::new(hint)
+            .style(Style::default().fg(palette::MUTED))
+            .wrap(Wrap { trim: false });
+        f.render_widget(p, team_inner);
+    } else {
+        let mut lines = Vec::new();
+        for m in &app.members {
+            let status_icon = match m.status {
+                a2a::MemberStatus::Active => ("●", palette::GREEN),
+                a2a::MemberStatus::Draining => ("◐", palette::YELLOW),
+                a2a::MemberStatus::Offline => ("○", palette::RED),
+            };
+            let load = format!("{}/{}", m.active_tasks, m.capacity);
+            lines.push(Line::from(vec![
+                Span::styled(status_icon.0, Style::default().fg(status_icon.1)),
+                Span::raw(" "),
+                Span::styled(&m.card.name, Style::default().fg(palette::FG)),
+                Span::styled(
+                    format!(" [{}]", m.role),
+                    Style::default().fg(palette::CYAN),
+                ),
+                Span::styled(
+                    format!("  {load}"),
+                    Style::default().fg(palette::MUTED),
+                ),
+                Span::styled(
+                    format!("  {}", &m.endpoint),
+                    Style::default().fg(palette::MUTED),
+                ),
+            ]));
+        }
+        let p = Paragraph::new(lines);
+        f.render_widget(p, team_inner);
+    }
+
+    // ── Recent Runs ──
+    let runs_block = Block::default()
+        .title(" Recent Runs ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(palette::BORDER))
+        .style(Style::default().bg(palette::SURFACE));
+
+    let runs_inner = runs_block.inner(cols[1]);
+    f.render_widget(runs_block, cols[1]);
+
+    if app.recent_runs.is_empty() {
+        let p = Paragraph::new("No runs yet.")
+            .style(Style::default().fg(palette::MUTED));
+        f.render_widget(p, runs_inner);
+    } else {
+        let mut lines = Vec::new();
+        for r in &app.recent_runs {
+            let state_color = match r.state.as_str() {
+                "finished" => palette::GREEN,
+                "running" => palette::ACCENT,
+                "failed" => palette::RED,
+                "cancelled" => palette::MUTED,
+                _ => palette::YELLOW,
+            };
+            let short_id = &r.run_id[..r.run_id.len().min(13)];
+            lines.push(Line::from(vec![
+                Span::styled(short_id, Style::default().fg(palette::FG)),
+                Span::raw("  "),
+                Span::styled(&r.state, Style::default().fg(state_color)),
+                Span::styled(
+                    format!("  {}/{}", r.completed, r.total),
+                    Style::default().fg(palette::MUTED),
+                ),
+            ]));
+        }
+        let p = Paragraph::new(lines);
+        f.render_widget(p, runs_inner);
     }
 }
 
@@ -890,7 +1031,7 @@ fn draw_input_footer(f: &mut Frame, area: Rect) {
     let p = Paragraph::new(Line::from(vec![
         Span::styled(" Enter ", Style::default().fg(palette::ACCENT).add_modifier(Modifier::BOLD)),
         Span::styled("submit  ", Style::default().fg(palette::MUTED)),
-        Span::styled(" Esc ", Style::default().fg(palette::ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(" Ctrl+D ", Style::default().fg(palette::ACCENT).add_modifier(Modifier::BOLD)),
         Span::styled("quit", Style::default().fg(palette::MUTED)),
     ]))
     .block(block);
