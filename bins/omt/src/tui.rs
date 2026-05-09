@@ -93,6 +93,11 @@ struct App {
     /// Spinner
     spinner_idx: usize,
 
+    /// Team manager (if A2A server is running)
+    team: Option<TeamManager>,
+    /// Cached member count (refreshed each tick)
+    member_count: usize,
+
     should_quit: bool,
 }
 
@@ -109,7 +114,7 @@ enum AppPhase {
 }
 
 impl App {
-    fn new() -> Self {
+    fn new(team: Option<TeamManager>) -> Self {
         let history = load_history();
         Self {
             input: String::new(),
@@ -125,6 +130,8 @@ impl App {
             run_id: None,
             run_state: RunState::Planned,
             spinner_idx: 0,
+            team,
+            member_count: 0,
             should_quit: false,
         }
     }
@@ -256,7 +263,19 @@ pub async fn run_tui(concurrency: usize, team: Option<TeamManager>) -> Result<()
 }
 
 async fn run_app(terminal: &mut AppTerminal, concurrency: usize, team: Option<TeamManager>) -> Result<()> {
-    let mut app = App::new();
+    // Spawn periodic stale-member expiry (every 60s, timeout 90s)
+    if let Some(ref tm) = team {
+        let tm = tm.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                tm.expire_stale(90).await;
+            }
+        });
+    }
+
+    let mut app = App::new(team.clone());
     let bus = OmtBus::new();
     let mut event_rx = bus.subscribe();
 
@@ -443,8 +462,12 @@ async fn run_app(terminal: &mut AppTerminal, concurrency: usize, team: Option<Te
             }
         }
 
-        // Update spinner
+        // Update spinner & member count
         app.spinner_idx = app.spinner_idx.wrapping_add(1);
+        if let Some(ref tm) = app.team {
+            let status = tm.status().await;
+            app.member_count = status.members.len();
+        }
 
         if app.should_quit {
             break;
@@ -551,7 +574,15 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let total = app.tasks.len();
 
     let title = match &app.phase {
-        AppPhase::Input => " omt — oh-my-team ".to_string(),
+        AppPhase::Input => {
+            if app.team.is_some() && app.member_count == 0 {
+                " omt — oh-my-team  ⚠ no agents connected ".to_string()
+            } else if app.member_count > 0 {
+                format!(" omt — oh-my-team  {} agent(s) online ", app.member_count)
+            } else {
+                " omt — oh-my-team ".to_string()
+            }
+        }
         AppPhase::PlanReview => format!(" omt — review plan ({total} tasks) "),
         AppPhase::Running => {
             let spinner = SPINNER_FRAMES[app.spinner_idx % SPINNER_FRAMES.len()];
@@ -562,11 +593,17 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         }
     };
 
+    let border_color = if app.phase == AppPhase::Input && app.team.is_some() && app.member_count == 0 {
+        palette::YELLOW
+    } else {
+        palette::ACCENT
+    };
+
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(palette::ACCENT))
+        .border_style(Style::default().fg(border_color))
         .style(Style::default().bg(palette::SURFACE));
 
     let run_info = if let Some(ref id) = app.run_id {

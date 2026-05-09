@@ -33,8 +33,8 @@ impl OmhConfig {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let content =
-            fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
         toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))
     }
 
