@@ -297,6 +297,9 @@ impl App {
                 self.title_generated = false;
                 self.input_tokens = session.input_tokens.min(u32::MAX as u64) as u32;
                 self.output_tokens = session.output_tokens.min(u32::MAX as u64) as u32;
+                // Persist initial model/effort to session state.
+                self.save_model_to_state();
+                self.save_effort_to_state();
             }
             Err(error) => {
                 self.messages
@@ -308,11 +311,22 @@ impl App {
     fn load_session(&mut self, session_id: &str) {
         let Some(harness) = &self.harness else { return };
         self.title_generated = true;
-        // Restore foreground agent from persisted session state.
+        // Restore session state (agent, model, effort).
         let state = harness.session_manager.load_state(session_id);
         self.foreground_agent = state
             .foreground_agent
             .unwrap_or_else(|| DEFAULT_AGENT.to_string());
+        if let Some(model) = &state.model {
+            if let Some((pid, mid)) = model.split_once('/') {
+                self.provider_id = pid.to_string();
+                self.model_id = mid.to_string();
+            }
+        }
+        match state.effort.as_deref() {
+            Some("low") => self.effort = provider::Effort::Low,
+            Some("high") => self.effort = provider::Effort::High,
+            _ => {}
+        }
         match harness.session_manager.get(session_id) {
             Ok(session) => {
                 self.session_id = Some(session.id.clone());
@@ -781,18 +795,9 @@ impl App {
     }
 
     fn set_active_model(&mut self, provider_id: &str, model_id: &str) -> Result<()> {
-        let active = crate::auth::ActiveModel {
-            provider_id: provider_id.to_string(),
-            model_id: model_id.to_string(),
-        };
-        let mut config = OmhConfig::load().unwrap_or_default();
-        config.active_model = Some(active);
-        config.save()?;
-        if let Ok(cwd) = std::env::current_dir() {
-            let _ = config.save_to(&OmhConfig::project_path(&cwd));
-        }
         self.provider_id = provider_id.to_string();
         self.model_id = model_id.to_string();
+        self.save_model_to_state();
         self.refresh_status();
         self.messages.push(ChatMessage::new(
             "system",
@@ -801,18 +806,29 @@ impl App {
         Ok(())
     }
 
-    fn save_effort(&self, effort: provider::Effort) -> Result<()> {
-        let mut config = OmhConfig::load().unwrap_or_default();
-        config.effort = if effort == provider::Effort::Default {
+    fn save_effort(&self) -> Result<()> {
+        self.save_effort_to_state();
+        Ok(())
+    }
+
+    fn save_model_to_state(&self) {
+        let Some(harness) = &self.harness else { return };
+        let Some(sid) = &self.session_id else { return };
+        let mut state = harness.session_manager.load_state(sid);
+        state.model = Some(format!("{}/{}", self.provider_id, self.model_id));
+        let _ = harness.session_manager.save_state(sid, &state);
+    }
+
+    fn save_effort_to_state(&self) {
+        let Some(harness) = &self.harness else { return };
+        let Some(sid) = &self.session_id else { return };
+        let mut state = harness.session_manager.load_state(sid);
+        state.effort = if self.effort == provider::Effort::Default {
             None
         } else {
-            Some(effort)
+            Some(format!("{:?}", self.effort).to_lowercase())
         };
-        config.save()?;
-        if let Ok(cwd) = std::env::current_dir() {
-            let _ = config.save_to(&OmhConfig::project_path(&cwd));
-        }
-        Ok(())
+        let _ = harness.session_manager.save_state(sid, &state);
     }
 
     /// Run a skill-augmented turn: inject skill content as instructions, execute with prompt.
@@ -1768,7 +1784,7 @@ impl App {
                                 }
                                 Ok(SlashResult::SwitchEffort(level)) => {
                                     self.effort = level;
-                                    if let Err(e) = self.save_effort(level) {
+                                    if let Err(e) = self.save_effort() {
                                         self.messages.push(ChatMessage::new(
                                             "system",
                                             format!("Error saving effort: {e}"),
@@ -2741,6 +2757,20 @@ fn git_status_for_repo(repo_path: &std::path::Path, label: &str) -> Option<GitRe
 }
 
 fn resolve_active_model(harness: &runtime::Harness) -> (String, String) {
+    // 1. Config.toml active_model (user's global default)
+    if let Ok(config) = OmhConfig::load() {
+        if let Some(active) = &config.active_model {
+            if harness
+                .provider_registry
+                .get(&active.provider_id)
+                .is_some()
+            {
+                return (active.provider_id.clone(), active.model_id.clone());
+            }
+        }
+    }
+
+    // 2. Agent spec → provider registry resolve
     let agent_spec = harness
         .agent_registry
         .get(DEFAULT_AGENT)

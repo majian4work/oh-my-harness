@@ -140,10 +140,12 @@ impl OmhConfig {
         }
     }
 
+    #[allow(dead_code)]
     pub fn save(&self) -> Result<()> {
         self.save_to(&Self::global_path())
     }
 
+    #[allow(dead_code)]
     pub fn save_to(&self, path: &std::path::Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;

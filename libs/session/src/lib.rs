@@ -51,7 +51,7 @@ struct SessionHeader {
     pub output_tokens: u64,
 }
 
-/// Persistent runtime state stored as `state.json` alongside the session JSONL.
+/// Persistent runtime state stored as `state.toml` alongside the session JSONL.
 /// Survives across `AgentRuntime` instances within the same session.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionState {
@@ -59,8 +59,14 @@ pub struct SessionState {
     #[serde(default)]
     pub turn_counter: u32,
     /// The currently active foreground agent for this session.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foreground_agent: Option<String>,
+    /// Active model as "provider_id/model_id".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Reasoning effort level override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 /// A snapshot of the conversation state at a specific point in time.
@@ -117,21 +123,30 @@ impl SessionManager {
     }
 
     fn state_path(&self, id: &str) -> PathBuf {
-        self.session_dir(id).join("state.json")
+        self.session_dir(id).join("state.toml")
     }
 
     pub fn load_state(&self, id: &str) -> SessionState {
         let path = self.state_path(id);
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(state) = toml::from_str(&content) {
+                return state;
+            }
+        }
+        // Backward compat: try legacy state.json
+        let legacy = self.session_dir(id).join("state.json");
+        if let Ok(content) = fs::read_to_string(&legacy) {
+            if let Ok(state) = serde_json::from_str::<SessionState>(&content) {
+                return state;
+            }
+        }
+        SessionState::default()
     }
 
     pub fn save_state(&self, id: &str, state: &SessionState) -> Result<()> {
         let path = self.state_path(id);
-        let json = serde_json::to_string(state)?;
-        fs::write(&path, json)?;
+        let content = toml::to_string(state)?;
+        fs::write(&path, content)?;
         Ok(())
     }
 
