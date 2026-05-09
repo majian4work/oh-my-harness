@@ -13,7 +13,10 @@ pub enum SlashResult {
     SwitchAgent(String),
     SwitchEffort(provider::Effort),
     /// Run a skill: inject skill content as context and execute a turn with the prompt.
-    RunSkill { skill_name: String, prompt: String },
+    RunSkill {
+        skill_name: String,
+        prompt: String,
+    },
 }
 
 pub fn dispatch(invocation: &SlashInvocation, workspace_root: &Path) -> Result<SlashResult> {
@@ -33,9 +36,7 @@ pub fn dispatch(invocation: &SlashInvocation, workspace_root: &Path) -> Result<S
             if registry.get(cmd).is_some() {
                 let prompt = args.trim().to_string();
                 if prompt.is_empty() {
-                    return Ok(SlashResult::Notify(format!(
-                        "Usage: /{cmd} <prompt>"
-                    )));
+                    return Ok(SlashResult::Notify(format!("Usage: /{cmd} <prompt>")));
                 }
                 return Ok(SlashResult::RunSkill {
                     skill_name: cmd.to_string(),

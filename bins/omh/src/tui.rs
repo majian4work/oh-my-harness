@@ -41,22 +41,6 @@ type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 const DEFAULT_AGENT: &str = "orchestrator";
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// Parse `@agent_name prompt text` from user input.
-/// Returns (Some(agent_name), prompt) if matched, or (None, original_text) otherwise.
-fn parse_at_agent(input: &str) -> (Option<String>, String) {
-    let trimmed = input.trim_start();
-    if let Some(rest) = trimmed.strip_prefix('@') {
-        if let Some(space_pos) = rest.find(|c: char| c.is_whitespace()) {
-            let agent = rest[..space_pos].to_string();
-            let prompt = rest[space_pos..].trim().to_string();
-            if !agent.is_empty() && !prompt.is_empty() {
-                return (Some(agent), prompt);
-            }
-        }
-    }
-    (None, input.to_string())
-}
-
 /// Compact summary of tool call arguments for display.
 fn compact_tool_args(args_json: &str) -> String {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(args_json) else {
@@ -596,22 +580,20 @@ impl App {
             }
         }
 
-        if let Some(at_pos) = input.rfind('@') {
-            if at_pos == 0 || input.as_bytes().get(at_pos - 1) == Some(&b' ') {
-                let partial = &input[at_pos..].to_lowercase();
-                let filtered: Vec<Suggestion> = Self::agent_suggestions()
-                    .into_iter()
-                    .filter(|s| s.label.to_lowercase().starts_with(partial) || partial == "@")
-                    .collect();
+        if let Some(query) = mention_parser::active_mention_query(input, self.cursor_position) {
+            let partial = query.typed_prefix.to_lowercase();
+            let filtered: Vec<Suggestion> = Self::agent_suggestions()
+                .into_iter()
+                .filter(|s| s.label.to_lowercase().starts_with(&partial) || partial == "@")
+                .collect();
 
-                if !filtered.is_empty() {
-                    self.suggestions = Some(SuggestionState {
-                        selected: 0,
-                        items: filtered,
-                        trigger: SuggestionTrigger::Agent,
-                    });
-                    return None;
-                }
+            if !filtered.is_empty() {
+                self.suggestions = Some(SuggestionState {
+                    selected: 0,
+                    items: filtered,
+                    trigger: SuggestionTrigger::Agent,
+                });
+                return None;
             }
         }
 
@@ -806,8 +788,12 @@ impl App {
             return;
         }
 
-        let Some(harness) = self.harness.clone() else { return };
-        let Some(session_id) = self.session_id.clone() else { return };
+        let Some(harness) = self.harness.clone() else {
+            return;
+        };
+        let Some(session_id) = self.session_id.clone() else {
+            return;
+        };
 
         let workspace_root = std::env::current_dir().unwrap_or_default();
         let registry = skill::SkillRegistry::load(&workspace_root)
@@ -858,7 +844,11 @@ impl App {
         });
     }
 
-    fn start_agent_turn(&mut self, text: String) {
+    fn start_agent_turn(&mut self, routing: input_ast::RoutingIntent) {
+        let text = routing.parsed_input.raw.clone();
+        let target_agent = routing.explicit_agent.as_ref().map(|a| a.name.clone());
+        let prompt = routing.prompt_text();
+
         if self.is_streaming {
             self.messages.push(ChatMessage::new(
                 "system",
@@ -888,20 +878,6 @@ impl App {
                 .push(ChatMessage::new("system", "No active session.".to_string()));
             return;
         };
-
-        // Parse @agent_name prefix: "@explore find all Cargo.toml" → agent="explore", prompt="find all Cargo.toml"
-        let (target_agent, prompt) = parse_at_agent(&text);
-
-        // Validate @agent target if specified
-        if let Some(ref agent) = target_agent {
-            if harness.agent_registry.get(agent).is_none() {
-                self.messages.push(ChatMessage::new(
-                    "system",
-                    format!("Unknown agent: @{agent}"),
-                ));
-                return;
-            }
-        }
 
         self.input_tokens = 0;
         self.output_tokens = 0;
@@ -1604,11 +1580,16 @@ impl App {
                             return None;
                         }
                         SuggestionTrigger::Agent => {
-                            if let Some(at_pos) = self.input.rfind('@') {
-                                self.input.truncate(at_pos);
-                                self.input.push_str(&selected);
-                                self.input.push(' ');
-                                self.cursor_position = self.input.len();
+                            if let Some(query) = mention_parser::active_mention_query(
+                                &self.input,
+                                self.cursor_position,
+                            ) {
+                                let replacement = format!("{selected} ");
+                                let new_cursor =
+                                    query.replace_range.start + replacement.len();
+                                self.input
+                                    .replace_range(query.replace_range, &replacement);
+                                self.cursor_position = new_cursor;
                             }
                             self.suggestions = None;
                             return None;
@@ -1656,87 +1637,110 @@ impl App {
                     self.cursor_position = 0;
 
                     let workspace_root = std::env::current_dir().unwrap_or_default();
-                    if let Some(invocation) = slash_input::parse_slash_invocation(&text) {
-                        match slash::dispatch(&invocation, &workspace_root) {
-                            Ok(SlashResult::Response(response)) => {
-                                self.messages.push(ChatMessage::new("user", text));
-                                self.messages.push(ChatMessage::new("system", response));
-                                self.refresh_status();
-                            }
-                            Ok(SlashResult::Notify(msg)) => {
-                                self.messages.push(ChatMessage::new("system", msg));
-                            }
-                            Ok(SlashResult::ListModels) => {
-                                return Some(AppAction::LoadModels);
-                            }
-                            Ok(SlashResult::ListAgents) => {
-                                // List primary agents in message panel
-                                if let Some(harness) = &self.harness {
-                                    let agents =
-                                        harness.agent_registry.explicit_invocation_candidates();
-                                    let list = agents
-                                        .iter()
-                                        .map(|a| format!("  {}: {}", a.name, a.description))
-                                        .collect::<Vec<_>>()
-                                        .join("\n");
-                                    self.messages.push(ChatMessage::new(
-                                        "system",
-                                        format!("Available agents:\n{list}"),
-                                    ));
+
+                    // Build intent resolver from agent registry
+                    let (explicit_agents, known_agents) = if let Some(h) = &self.harness {
+                        let explicit: Vec<String> = h
+                            .agent_registry
+                            .explicit_invocation_candidates()
+                            .iter()
+                            .map(|a| a.name.clone())
+                            .collect();
+                        let known: Vec<String> =
+                            h.agent_registry.all().iter().map(|a| a.name.clone()).collect();
+                        (explicit, known)
+                    } else {
+                        (vec![], vec![])
+                    };
+                    let resolver =
+                        input_intent::InputIntentResolver::new(explicit_agents, known_agents);
+
+                    match resolver.resolve(&text) {
+                        Ok(input_ast::SubmitIntent::Slash(invocation)) => {
+                            match slash::dispatch(&invocation, &workspace_root) {
+                                Ok(SlashResult::Response(response)) => {
+                                    self.messages.push(ChatMessage::new("user", text));
+                                    self.messages.push(ChatMessage::new("system", response));
+                                    self.refresh_status();
                                 }
-                            }
-                            Ok(SlashResult::ListNotifications) => {
-                                // Placeholder — notifications not yet in this branch
-                                self.messages
-                                    .push(ChatMessage::new("system", "No notifications."));
-                            }
-                            Ok(SlashResult::SwitchAgent(name)) => {
-                                if let Some(harness) = &self.harness {
-                                    if harness.agent_registry.get(&name).is_none() {
+                                Ok(SlashResult::Notify(msg)) => {
+                                    self.messages.push(ChatMessage::new("system", msg));
+                                }
+                                Ok(SlashResult::ListModels) => {
+                                    return Some(AppAction::LoadModels);
+                                }
+                                Ok(SlashResult::ListAgents) => {
+                                    if let Some(harness) = &self.harness {
+                                        let agents =
+                                            harness.agent_registry.explicit_invocation_candidates();
+                                        let list = agents
+                                            .iter()
+                                            .map(|a| format!("  {}: {}", a.name, a.description))
+                                            .collect::<Vec<_>>()
+                                            .join("\n");
                                         self.messages.push(ChatMessage::new(
                                             "system",
-                                            format!("Unknown agent: {name}\nUse /agents to list available agents."),
-                                        ));
-                                    } else {
-                                        self.foreground_agent = name.clone();
-                                        // Persist to session state
-                                        if let Some(sid) = &self.session_id {
-                                            let mut state = harness.session_manager.load_state(sid);
-                                            state.foreground_agent = Some(name.clone());
-                                            let _ = harness.session_manager.save_state(sid, &state);
-                                        }
-                                        self.messages.push(ChatMessage::new(
-                                            "system",
-                                            format!("✓ Switched to agent: {name}"),
+                                            format!("Available agents:\n{list}"),
                                         ));
                                     }
                                 }
-                            }
-                            Ok(SlashResult::SwitchEffort(level)) => {
-                                self.effort = level;
-                                // Persist to config file
-                                if let Err(e) = self.save_effort(level) {
-                                    self.messages.push(ChatMessage::new(
-                                        "system",
-                                        format!("Error saving effort: {e}"),
-                                    ));
-                                } else {
-                                    self.messages.push(ChatMessage::new(
-                                        "system",
-                                        format!("✓ Effort set to {level:?}"),
-                                    ));
+                                Ok(SlashResult::ListNotifications) => {
+                                    self.messages
+                                        .push(ChatMessage::new("system", "No notifications."));
+                                }
+                                Ok(SlashResult::SwitchAgent(name)) => {
+                                    if let Some(harness) = &self.harness {
+                                        if harness.agent_registry.get(&name).is_none() {
+                                            self.messages.push(ChatMessage::new(
+                                                "system",
+                                                format!("Unknown agent: {name}\nUse /agents to list available agents."),
+                                            ));
+                                        } else {
+                                            self.foreground_agent = name.clone();
+                                            if let Some(sid) = &self.session_id {
+                                                let mut state =
+                                                    harness.session_manager.load_state(sid);
+                                                state.foreground_agent = Some(name.clone());
+                                                let _ =
+                                                    harness.session_manager.save_state(sid, &state);
+                                            }
+                                            self.messages.push(ChatMessage::new(
+                                                "system",
+                                                format!("✓ Switched to agent: {name}"),
+                                            ));
+                                        }
+                                    }
+                                }
+                                Ok(SlashResult::SwitchEffort(level)) => {
+                                    self.effort = level;
+                                    if let Err(e) = self.save_effort(level) {
+                                        self.messages.push(ChatMessage::new(
+                                            "system",
+                                            format!("Error saving effort: {e}"),
+                                        ));
+                                    } else {
+                                        self.messages.push(ChatMessage::new(
+                                            "system",
+                                            format!("✓ Effort set to {level:?}"),
+                                        ));
+                                    }
+                                }
+                                Ok(SlashResult::RunSkill { skill_name, prompt }) => {
+                                    self.start_skill_turn(skill_name, prompt);
+                                }
+                                Err(e) => {
+                                    self.messages
+                                        .push(ChatMessage::new("system", format!("Error: {e}")));
                                 }
                             }
-                            Ok(SlashResult::RunSkill { skill_name, prompt }) => {
-                                self.start_skill_turn(skill_name, prompt);
-                            }
-                            Err(e) => {
-                                self.messages
-                                    .push(ChatMessage::new("system", format!("Error: {e}")));
-                            }
                         }
-                    } else {
-                        self.start_agent_turn(text);
+                        Ok(input_ast::SubmitIntent::Chat(routing)) => {
+                            self.start_agent_turn(routing);
+                        }
+                        Err(e) => {
+                            self.messages
+                                .push(ChatMessage::new("system", e.to_string()));
+                        }
                     }
                     self.scroll_offset = 0;
                 }

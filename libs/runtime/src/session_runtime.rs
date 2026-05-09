@@ -96,9 +96,7 @@ impl SessionRuntime {
         runtime.current_turn = self.state.turn_counter;
 
         let effective_input = if let Some(skill) = skill_context {
-            format!(
-                "<skill_instructions>\n{skill}\n</skill_instructions>\n\n{input}"
-            )
+            format!("<skill_instructions>\n{skill}\n</skill_instructions>\n\n{input}")
         } else {
             input.to_string()
         };

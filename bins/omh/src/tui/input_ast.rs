@@ -34,6 +34,23 @@ pub struct RoutingIntent {
     pub file_references: Vec<FileReferenceToken>,
 }
 
+impl RoutingIntent {
+    /// Returns the input text with the explicit @agent mention removed.
+    pub fn prompt_text(&self) -> String {
+        self.parsed_input
+            .segments
+            .iter()
+            .filter_map(|seg| match seg {
+                ParsedInputSegment::Text(t) => Some(t.as_str()),
+                ParsedInputSegment::FileReference(f) => Some(f.raw.as_str()),
+                ParsedInputSegment::ExplicitAgent(_) => None,
+            })
+            .collect::<String>()
+            .trim()
+            .to_string()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlashInvocation {
     pub raw: String,
