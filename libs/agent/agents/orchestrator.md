@@ -2,15 +2,7 @@
 name: orchestrator
 description: Central coordinator that delegates focused work to the best-fit subagent
 user_invocable: true
-can_delegate_to:
-  - worker
-  - oracle
-  - explore
-  - librarian
-  - planner
-  - reviewer
 config:
-  mode: primary
   tier: premium
   max_turns: 200
   permission_level: FullAccess

@@ -1441,7 +1441,7 @@ impl App {
                             Ok(SlashResult::ListAgents) => {
                                 // List primary agents in message panel
                                 if let Some(harness) = &self.harness {
-                                    let agents = harness.agent_registry.primary_switchable_agents();
+                                    let agents = harness.agent_registry.explicit_invocation_candidates();
                                     let list = agents
                                         .iter()
                                         .map(|a| format!("  {}: {}", a.name, a.description))

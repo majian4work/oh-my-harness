@@ -8,12 +8,6 @@ use permission::{PermissionPolicy, PermissionRule};
 use serde::{Deserialize, Serialize};
 use tool::PermissionLevel;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AgentMode {
-    Primary,
-    Subagent,
-}
-
 /// Model capability tier — declares what level of model an agent needs.
 /// Maps to a concrete model via ModelProfiles in config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -43,8 +37,6 @@ struct AgentFrontMatter {
     #[serde(default = "default_user_invocable")]
     user_invocable: bool,
     #[serde(default)]
-    can_delegate_to: Vec<String>,
-    #[serde(default)]
     config: Vec<(String, String)>,
     #[serde(default)]
     avoid_when: Vec<String>,
@@ -70,12 +62,9 @@ pub struct ModelSpec {
 pub struct AgentDefinition {
     pub name: String,
     pub description: String,
-    pub mode: AgentMode,
     pub tier: ModelTier,
     #[serde(default = "default_user_invocable")]
     pub user_invocable: bool,
-    #[serde(default)]
-    pub can_delegate_to: Vec<String>,
     pub system_prompt: String,
     pub model: Option<ModelSpec>,
     pub permission_rules: PermissionPolicy,
@@ -87,16 +76,8 @@ pub struct AgentDefinition {
 }
 
 impl AgentDefinition {
-    pub fn is_primary_switchable(&self) -> bool {
-        self.mode == AgentMode::Primary
-    }
-
     pub fn is_explicitly_invocable(&self) -> bool {
         self.user_invocable
-    }
-
-    pub fn allows_delegation_to(&self, agent_name: &str) -> bool {
-        self.can_delegate_to.iter().any(|name| name == agent_name)
     }
 }
 
@@ -140,17 +121,11 @@ impl AgentRegistry {
         self.agents.values().collect()
     }
 
-    pub fn subagents(&self) -> Vec<&AgentDefinition> {
+    /// Returns all agents except the given one, for building delegation prompts.
+    pub fn delegates_for(&self, caller: &str) -> Vec<&AgentDefinition> {
         self.agents
             .values()
-            .filter(|agent| !agent.is_primary_switchable())
-            .collect()
-    }
-
-    pub fn primary_switchable_agents(&self) -> Vec<&AgentDefinition> {
-        self.agents
-            .values()
-            .filter(|agent| agent.is_primary_switchable())
+            .filter(|agent| agent.name != caller)
             .collect()
     }
 
@@ -159,11 +134,6 @@ impl AgentRegistry {
             .values()
             .filter(|agent| agent.is_explicitly_invocable())
             .collect()
-    }
-
-    pub fn delegation_allowed(&self, agent_name: &str, target_name: &str) -> bool {
-        self.get(agent_name)
-            .is_some_and(|agent| agent.allows_delegation_to(target_name))
     }
 
     pub fn all_metadata(&self) -> Vec<(&str, &AgentMetadata)> {
@@ -245,7 +215,7 @@ impl AgentRegistry {
             return;
         }
 
-        let prompt = generate_orchestrator_prompt(self);
+        let prompt = generate_delegation_prompt("orchestrator", self);
 
         if let Some(orchestrator) = self.agents.get_mut("orchestrator") {
             orchestrator.system_prompt = prompt;
@@ -293,7 +263,6 @@ pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<Agen
     let avoid_when = front_matter.avoid_when;
     let triggers = front_matter.triggers;
 
-    let mut mode = AgentMode::Subagent;
     let mut tier = ModelTier::Standard;
     let mut model_id = None;
     let mut provider_id = None;
@@ -303,7 +272,7 @@ pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<Agen
 
     for (key, value) in config {
         match key.as_str() {
-            "mode" => mode = parse_agent_mode(&value)?,
+            "mode" => { /* legacy field, ignored */ }
             "cost" | "tier" => tier = parse_model_tier(&value)?,
             "model" => model_id = Some(value),
             "provider" => provider_id = Some(value),
@@ -352,10 +321,8 @@ pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<Agen
     Ok(AgentDefinition {
         name,
         description,
-        mode,
         tier,
         user_invocable: front_matter.user_invocable,
-        can_delegate_to: front_matter.can_delegate_to,
         system_prompt,
         model: model_id.map(|model_id| ModelSpec {
             model_id,
@@ -392,17 +359,16 @@ pub fn builtin_agent_definitions() -> Vec<AgentDefinition> {
         .collect()
 }
 
-pub fn generate_orchestrator_prompt(registry: &AgentRegistry) -> String {
+pub fn generate_delegation_prompt(caller: &str, registry: &AgentRegistry) -> String {
     let mut lines = vec![
-        "You are the orchestrator agent.".to_string(),
-        "Delegate focused work to subagents when they are a better fit than doing the work yourself.".to_string(),
-        "Use the table below to choose the right subagent.".to_string(),
+        "You can delegate focused work to other agents when they are a better fit than doing the work yourself.".to_string(),
+        "Use the table below to choose the right agent.".to_string(),
         String::new(),
-        "| Name | Cost | Description | Avoid When | Triggers |".to_string(),
+        "| Name | Tier | Description | Avoid When | Triggers |".to_string(),
         "| --- | --- | --- | --- | --- |".to_string(),
     ];
 
-    for agent in registry.subagents() {
+    for agent in registry.delegates_for(caller) {
         let avoid_when = join_or_dash(&agent.metadata.avoid_when);
         let triggers = if agent.metadata.triggers.is_empty() {
             "-".to_string()
@@ -419,7 +385,7 @@ pub fn generate_orchestrator_prompt(registry: &AgentRegistry) -> String {
         lines.push(format!(
             "| {} | {} | {} | {} | {} |",
             agent.name,
-            format_cost(agent.tier),
+            format_tier(agent.tier),
             sanitize_table_cell(&agent.description),
             sanitize_table_cell(&avoid_when),
             sanitize_table_cell(&triggers),
@@ -427,14 +393,6 @@ pub fn generate_orchestrator_prompt(registry: &AgentRegistry) -> String {
     }
 
     lines.join("\n")
-}
-
-fn parse_agent_mode(value: &str) -> Result<AgentMode> {
-    match normalize_key(value).as_str() {
-        "primary" => Ok(AgentMode::Primary),
-        "subagent" => Ok(AgentMode::Subagent),
-        _ => bail!("invalid agent mode: {value}"),
-    }
 }
 
 fn parse_model_tier(value: &str) -> Result<ModelTier> {
@@ -495,7 +453,8 @@ fn parse_agent_front_matter(content: &str) -> Result<(AgentFrontMatter, &str)> {
                 front_matter.user_invocable = parse_bool(value.trim())?;
             }
             "candelegateto" => {
-                front_matter.can_delegate_to = parse_string_list(value.trim(), &mut lines)?;
+                // legacy field, ignored — delegation is now depth-based
+                let _ = parse_string_list(value.trim(), &mut lines)?;
             }
             "config" => {
                 front_matter.config = parse_nested_key_values(value.trim(), &mut lines)?;
@@ -522,7 +481,6 @@ impl AgentFrontMatter {
             name: None,
             description: None,
             user_invocable: default_user_invocable(),
-            can_delegate_to: Vec::new(),
             config: Vec::new(),
             avoid_when: Vec::new(),
             triggers: Vec::new(),
@@ -637,7 +595,7 @@ fn sanitize_table_cell(value: &str) -> String {
     value.replace('|', "\\|").replace('\n', " ")
 }
 
-fn format_cost(tier: ModelTier) -> &'static str {
+fn format_tier(tier: ModelTier) -> &'static str {
     match tier {
         ModelTier::Cheap => "Cheap",
         ModelTier::Standard => "Standard",
@@ -712,7 +670,6 @@ Stay focused.
 
         assert_eq!(agent.name, "sample-agent");
         assert_eq!(agent.description, "A sample agent used in tests.");
-        assert_eq!(agent.mode, AgentMode::Subagent);
         assert_eq!(agent.tier, ModelTier::Cheap);
         assert_eq!(agent.max_turns, Some(30));
         assert_eq!(agent.model.unwrap().model_id, "gpt-4o-mini");
@@ -756,7 +713,6 @@ You are the meta agent.
         .unwrap();
 
         assert_eq!(agent.name, "meta-agent");
-        assert_eq!(agent.mode, AgentMode::Subagent);
         assert_eq!(agent.tier, ModelTier::Premium);
         assert_eq!(agent.max_turns, Some(50));
         assert_eq!(agent.model.unwrap().model_id, "claude-sonnet-4.6");
@@ -797,7 +753,6 @@ You are the test agent.
         .unwrap();
 
         assert!(!agent.user_invocable);
-        assert_eq!(agent.can_delegate_to, vec!["worker", "oracle"]);
     }
 
     #[test]
@@ -817,7 +772,6 @@ You are the test agent.
         .unwrap();
 
         assert!(agent.user_invocable);
-        assert!(agent.can_delegate_to.is_empty());
     }
 
     #[test]
@@ -858,35 +812,13 @@ You are the test agent.
             );
         }
 
-        assert_eq!(
-            registry.get("orchestrator").unwrap().mode,
-            AgentMode::Primary
-        );
         assert_eq!(registry.get("explore").unwrap().tier, ModelTier::Cheap);
         assert!(registry.get("orchestrator").unwrap().user_invocable);
-        assert_eq!(
-            registry.get("orchestrator").unwrap().can_delegate_to,
-            vec![
-                "worker",
-                "oracle",
-                "explore",
-                "librarian",
-                "planner",
-                "reviewer"
-            ]
-        );
     }
 
     #[test]
     fn registry_exposes_filtered_agent_sets_from_metadata() {
         let registry = AgentRegistry::load_from_paths(Vec::<PathBuf>::new()).unwrap();
-
-        let primary_names = registry
-            .primary_switchable_agents()
-            .into_iter()
-            .map(|agent| agent.name.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(primary_names, vec!["orchestrator", "planner"]);
 
         let invocable_names = registry
             .explicit_invocation_candidates()
@@ -906,20 +838,24 @@ You are the test agent.
             ]
         );
 
-        assert!(!registry.delegation_allowed("worker", "oracle"));
-        assert!(registry.delegation_allowed("orchestrator", "oracle"));
-        assert!(registry.delegation_allowed("orchestrator", "reviewer"));
+        // delegates_for excludes the caller itself
+        let delegates = registry
+            .delegates_for("orchestrator")
+            .into_iter()
+            .map(|a| a.name.as_str())
+            .collect::<Vec<_>>();
+        assert!(!delegates.contains(&"orchestrator"));
+        assert!(delegates.contains(&"worker"));
+        assert!(delegates.contains(&"reviewer"));
     }
 
     #[test]
-    fn agent_definition_exposes_delegation_allowlist_checks() {
+    fn agent_definition_exposes_invocability_check() {
         let agent = parse_agent_markdown(
             r#"---
 name: sample-agent
 user_invocable: true
-can_delegate_to: [worker, oracle]
 config:
-  mode: primary
   cost: cheap
 ---
 You are the test agent.
@@ -928,23 +864,22 @@ You are the test agent.
         )
         .unwrap();
 
-        assert!(agent.is_primary_switchable());
         assert!(agent.is_explicitly_invocable());
-        assert!(agent.allows_delegation_to("worker"));
-        assert!(!agent.allows_delegation_to("reviewer"));
     }
 
     #[test]
-    fn orchestrator_prompt_lists_all_subagents() {
+    fn delegation_prompt_lists_other_agents() {
         let registry = AgentRegistry::load_from_paths(Vec::<PathBuf>::new()).unwrap();
-        let prompt = generate_orchestrator_prompt(&registry);
+        let prompt = generate_delegation_prompt("orchestrator", &registry);
 
         for name in ["worker", "oracle", "explore", "librarian", "reviewer"] {
-            assert!(prompt.contains(name), "missing subagent in prompt: {name}");
+            assert!(prompt.contains(name), "missing agent in prompt: {name}");
         }
+        // orchestrator should not list itself
+        assert!(!prompt.contains("| orchestrator |"));
 
         assert!(
-            prompt.contains("| Name | Cost | Description | Avoid When | Triggers |")
+            prompt.contains("| Name | Tier | Description | Avoid When | Triggers |")
         );
         assert!(
             registry

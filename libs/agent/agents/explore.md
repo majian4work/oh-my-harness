@@ -2,9 +2,7 @@
 name: explore
 description: Fast read-only codebase search, file discovery, and symbol lookup
 user_invocable: true
-can_delegate_to: []
 config:
-  mode: subagent
   tier: cheap
   effort: low
   max_turns: 30

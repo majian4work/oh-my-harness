@@ -2,9 +2,7 @@
 name: worker
 description: Focused task executor for concrete code changes and implementation work
 user_invocable: true
-can_delegate_to: []
 config:
-  mode: subagent
   tier: standard
   max_turns: 60
   permission_level: WorkspaceWrite

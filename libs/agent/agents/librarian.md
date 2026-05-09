@@ -2,9 +2,7 @@
 name: librarian
 description: External documentation lookup, API references, and web research specialist
 user_invocable: true
-can_delegate_to: []
 config:
-  mode: subagent
   tier: standard
   max_turns: 40
 avoid_when:

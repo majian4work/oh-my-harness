@@ -2,9 +2,7 @@
 name: planner
 description: Structured planning specialist that produces concrete, verifiable plans without writing code
 user_invocable: true
-can_delegate_to: []
 config:
-  mode: primary
   tier: premium
   effort: high
   max_turns: 80

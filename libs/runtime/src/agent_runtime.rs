@@ -31,6 +31,9 @@ pub struct AgentRuntime {
     pub model_override: Option<ModelSpec>,
     pub effort_override: Option<provider::Effort>,
     pub interactive: bool,
+    /// Execution depth: 0 = foreground (user-invoked), >0 = spawned sub-agent.
+    /// Only depth-0 agents can delegate to other agents.
+    pub depth: u32,
     pub turn_routing: TurnRouting,
     pub shared_harness: Option<std::sync::Arc<Harness>>,
     logger: Option<SessionLogger>,
@@ -72,6 +75,16 @@ impl TurnRouting {
     }
 }
 
+impl AgentRuntime {
+    fn effective_delegation_policy(&self) -> DelegationPolicy {
+        if self.depth > 0 {
+            DelegationPolicy::LeafOnly
+        } else {
+            self.turn_routing.delegation_policy()
+        }
+    }
+}
+
 pub struct ToolCallRecord {
     pub name: String,
     pub duration_ms: u64,
@@ -103,6 +116,7 @@ impl AgentRuntime {
             model_override: None,
             effort_override: None,
             interactive: true,
+            depth: 0,
             turn_routing: TurnRouting::default(),
             shared_harness: None,
             logger: None,
@@ -280,7 +294,7 @@ impl AgentRuntime {
         if self.turn_routing.explicit_agent_name().is_some() && !agent.is_explicitly_invocable() {
             bail!("agent '{}' cannot be invoked explicitly", agent.name);
         }
-        let delegation_policy = self.turn_routing.delegation_policy();
+        let delegation_policy = self.effective_delegation_policy();
 
         let cost_hint = Some(agent_tier_to_model_tier(agent.tier));
 
@@ -959,7 +973,7 @@ fn execute_spawn_agent<'a>(
     Box::pin(async move {
         if matches!(delegation_policy, DelegationPolicy::LeafOnly) {
             return Ok(tool::ToolOutput::error(format!(
-                "Explicit @agent turns are leaf-only. Agent '{caller_agent_name}' cannot delegate with spawn_agent in this turn."
+                "Agent '{caller_agent_name}' cannot delegate further. Only foreground agents can spawn sub-agents."
             )));
         }
 
@@ -981,26 +995,6 @@ fn execute_spawn_agent<'a>(
         if harness.agent_registry.get(&agent_name).is_none() {
             return Ok(tool::ToolOutput::error(format!(
                 "unknown agent: {agent_name}"
-            )));
-        }
-
-        if !harness
-            .agent_registry
-            .delegation_allowed(caller_agent_name, &agent_name)
-        {
-            let allowed_targets = harness
-                .agent_registry
-                .get(caller_agent_name)
-                .map(|agent| {
-                    if agent.can_delegate_to.is_empty() {
-                        "(none)".to_string()
-                    } else {
-                        agent.can_delegate_to.join(", ")
-                    }
-                })
-                .unwrap_or_else(|| "(unknown caller)".to_string());
-            return Ok(tool::ToolOutput::error(format!(
-                "Delegation policy denied: agent '{caller_agent_name}' cannot delegate to '{agent_name}'. Allowed targets: {allowed_targets}."
             )));
         }
 
@@ -1063,6 +1057,7 @@ fn execute_spawn_agent<'a>(
                 .with_logger(harness);
             runtime.model_override = model_ov;
             runtime.interactive = false;
+            runtime.depth = 1;
 
             let result = Box::pin(runtime.run_turn(harness, &prompt)).await;
 
@@ -1194,6 +1189,7 @@ async fn run_background_agent(
     let mut runtime = AgentRuntime::new(agent_name.clone(), session_id, 10);
     runtime.model_override = model_override;
     runtime.interactive = false;
+    runtime.depth = 1;
     runtime.logger = {
         let log_path = harness.session_manager.log_path(&runtime.session_id);
         if let Some(parent) = log_path.parent() {

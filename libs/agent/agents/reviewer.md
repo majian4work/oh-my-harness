@@ -2,9 +2,7 @@
 name: reviewer
 description: Post-implementation review and QA validation that decides if work is shippable
 user_invocable: true
-can_delegate_to: []
 config:
-  mode: subagent
   tier: premium
   max_turns: 50
 avoid_when:

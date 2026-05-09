@@ -369,8 +369,8 @@ pub async fn cmd_update_best_models(global: bool) -> Result<()> {
             .map(|m| m.model_id.as_str())
             .unwrap_or("none");
         agent_info.push_str(&format!(
-            "- {} ({:?}): {}, tier={:?}, current_model={}\n",
-            a.name, a.mode, a.description, a.tier, current_model
+            "- {}: {}, tier={:?}, current_model={}\n",
+            a.name, a.description, a.tier, current_model
         ));
     }
 

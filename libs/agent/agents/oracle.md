@@ -2,9 +2,7 @@
 name: oracle
 description: Read-only advisor for architecture decisions, debugging analysis, and second opinions
 user_invocable: true
-can_delegate_to: []
 config:
-  mode: subagent
   tier: premium
   effort: high
   max_turns: 50
