@@ -103,7 +103,6 @@ name: my-agent
 description: Short description telling the orchestrator when to delegate here
 user_invocable: true
 config:
-  mode: subagent
   cost: cheap
   model: gpt-4.1
   provider: openai
@@ -124,17 +123,16 @@ You are a specialized agent that...
 
 **Front matter fields:**
 
-| Key               | Type     | Default          | Description                                            |
-| ----------------- | -------- | ---------------- | ------------------------------------------------------ |
-| `name`            | string   | *(required)*     | Agent name (used for delegation and invocation)        |
-| `description`     | string   | `Agent '<name>'` | Short description for the orchestrator's routing table |
-| `user_invocable`  | bool     | `true`           | Whether users can invoke this agent directly           |
+| Key              | Type   | Default          | Description                                            |
+| ---------------- | ------ | ---------------- | ------------------------------------------------------ |
+| `name`           | string | *(required)*     | Agent name (used for delegation and invocation)        |
+| `description`    | string | `Agent '<name>'` | Short description for the orchestrator's routing table |
+| `user_invocable` | bool   | `true`           | Whether users can invoke this agent directly           |
 
 **Config keys** (nested under `config:`):
 
 | Key                | Values                                     | Default    | Description                                        |
 | ------------------ | ------------------------------------------ | ---------- | -------------------------------------------------- |
-| `mode`             | `primary`, `subagent`                      | `subagent` | Primary agents handle top-level input              |
 | `cost`             | `free`, `cheap`, `expensive`               | `cheap`    | Influences model selection when no model specified |
 | `model`            | model ID string                            | —          | Specific model to use                              |
 | `provider`         | provider ID string                         | —          | Specific provider to use                           |
@@ -152,10 +150,10 @@ You are a specialized agent that...
 
 **Routing metadata** (used by orchestrator to choose subagents):
 
-| Key          | Type                   | Description                                       |
-| ------------ | ---------------------- | ------------------------------------------------- |
-| `avoid_when` | string[]               | Scenarios where this agent is a poor fit          |
-| `triggers`   | map (keyword: meaning) | Keyword triggers the orchestrator can match on    |
+| Key          | Type                   | Description                                    |
+| ------------ | ---------------------- | ---------------------------------------------- |
+| `avoid_when` | string[]               | Scenarios where this agent is a poor fit       |
+| `triggers`   | map (keyword: meaning) | Keyword triggers the orchestrator can match on |
 
 ## Skill Definitions (Markdown)
 

@@ -623,11 +623,10 @@ fn agent_markdown_with_delegates(
     name: &str,
     permission_level: &str,
     user_invocable: bool,
-    can_delegate_to: &[&str],
+    _can_delegate_to: &[&str],
 ) -> String {
-    let delegation_list = format_front_matter_list(can_delegate_to);
     format!(
-        "---\nname: {name}\nuser_invocable: {user_invocable}\ncan_delegate_to: {delegation_list}\nconfig:\n  mode: primary\n  cost: cheap\n  model: mock-model\n  provider: mock\n  permission_level: {permission_level}\n---\n# {name}\nReturn mock provider responses.\n"
+        "---\nname: {name}\nuser_invocable: {user_invocable}\nconfig:\n  cost: cheap\n  model: mock-model\n  provider: mock\n  permission_level: {permission_level}\n---\n# {name}\nReturn mock provider responses.\n"
     )
 }
 
@@ -635,20 +634,11 @@ fn subagent_markdown_with_delegates(
     name: &str,
     permission_level: &str,
     user_invocable: bool,
-    can_delegate_to: &[&str],
+    _can_delegate_to: &[&str],
 ) -> String {
-    let delegation_list = format_front_matter_list(can_delegate_to);
     format!(
-        "---\nname: {name}\nuser_invocable: {user_invocable}\ncan_delegate_to: {delegation_list}\nconfig:\n  mode: subagent\n  cost: cheap\n  model: mock-model\n  provider: mock\n  permission_level: {permission_level}\n---\n# {name}\nReturn mock provider responses.\n"
+        "---\nname: {name}\nuser_invocable: {user_invocable}\nconfig:\n  cost: cheap\n  model: mock-model\n  provider: mock\n  permission_level: {permission_level}\n---\n# {name}\nReturn mock provider responses.\n"
     )
-}
-
-fn format_front_matter_list(values: &[&str]) -> String {
-    if values.is_empty() {
-        "[]".to_string()
-    } else {
-        format!("[{}]", values.join(", "))
-    }
 }
 
 struct TestWorkspace {

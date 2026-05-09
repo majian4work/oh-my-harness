@@ -294,8 +294,8 @@ Tool Call → PermissionGuard → Execute → AuditTrail
 
 Auto-collected JSONL metrics per turn:
 
-| Dimension | Content                          |
-| --------- | -------------------------------- |
+| Dimension   | Content                        |
+| ----------- | ------------------------------ |
 | **Latency** | End-to-end / Provider response |
 | **Token**   | input / output / per-Agent agg |
 | **Tools**   | Call count / error rate / time |
@@ -303,11 +303,11 @@ Auto-collected JSONL metrics per turn:
 
 ### 🔧 omh-dev Developer Toolkit
 
-| Command     | Function                                     |
-| ----------- | -------------------------------------------- |
-| `diagnose`  | Anomaly detection (DATA_IGNORED / DUP_CALL)  |
-| `telemetry` | Latency / Token / tool call stats            |
-| `eval`      | TOML-based automated regression tests        |
+| Command     | Function                                    |
+| ----------- | ------------------------------------------- |
+| `diagnose`  | Anomaly detection (DATA_IGNORED / DUP_CALL) |
+| `telemetry` | Latency / Token / tool call stats           |
+| `eval`      | TOML-based automated regression tests       |
 
 </div>
 <div class="col">

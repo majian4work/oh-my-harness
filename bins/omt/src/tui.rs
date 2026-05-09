@@ -3,7 +3,6 @@ use std::io;
 use std::time::Duration;
 
 use anyhow::Result;
-use unicode_width::UnicodeWidthStr;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
@@ -17,6 +16,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
+use unicode_width::UnicodeWidthStr;
 
 use a2a::TeamMember;
 
@@ -155,7 +155,9 @@ impl App {
             for run_id in runs.into_iter().take(5) {
                 if let Ok(rs) = state::load_state(&run_id) {
                     let total = rs.graph.tasks.len();
-                    let completed = rs.graph.summary()
+                    let completed = rs
+                        .graph
+                        .summary()
                         .get(&TaskState::Completed)
                         .copied()
                         .unwrap_or(0);
@@ -172,12 +174,20 @@ impl App {
 
     fn apply_event(&mut self, event: &OmtEvent) {
         match event {
-            OmtEvent::TaskStateChanged { task_id, new_state, .. } => {
+            OmtEvent::TaskStateChanged {
+                task_id, new_state, ..
+            } => {
                 if let Some(tv) = self.tasks.get_mut(task_id) {
                     tv.state = *new_state;
                 }
             }
-            OmtEvent::TaskRetrying { task_id, attempt, max_attempts, error, .. } => {
+            OmtEvent::TaskRetrying {
+                task_id,
+                attempt,
+                max_attempts,
+                error,
+                ..
+            } => {
                 if let Some(tv) = self.tasks.get_mut(task_id) {
                     tv.state = TaskState::Retrying;
                     tv.attempt = *attempt;
@@ -193,7 +203,12 @@ impl App {
                     }
                 }
             }
-            OmtEvent::TaskCompleted { task_id, duration_secs, input_tokens, output_tokens } => {
+            OmtEvent::TaskCompleted {
+                task_id,
+                duration_secs,
+                input_tokens,
+                output_tokens,
+            } => {
                 if let Some(tv) = self.tasks.get_mut(task_id) {
                     tv.state = TaskState::Completed;
                     tv.duration_secs = Some(*duration_secs);
@@ -226,20 +241,23 @@ impl App {
         self.tasks.clear();
         for t in tasks {
             self.task_order.push(t.id.clone());
-            self.tasks.insert(t.id.clone(), TaskView {
-                name: t.name.clone(),
-                agent: t.agent.clone(),
-                state: t.state,
-                attempt: t.attempt_count,
-                max_attempts: t.max_attempts,
-                duration_secs: None,
-                last_output: Vec::new(),
-                error: None,
-                depends_on: t.depends_on.clone(),
-                token_budget: t.token_budget,
-                input_tokens: 0,
-                output_tokens: 0,
-            });
+            self.tasks.insert(
+                t.id.clone(),
+                TaskView {
+                    name: t.name.clone(),
+                    agent: t.agent.clone(),
+                    state: t.state,
+                    attempt: t.attempt_count,
+                    max_attempts: t.max_attempts,
+                    duration_secs: None,
+                    last_output: Vec::new(),
+                    error: None,
+                    depends_on: t.depends_on.clone(),
+                    token_budget: t.token_budget,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                },
+            );
         }
         if self.selected >= self.task_order.len() && !self.task_order.is_empty() {
             self.selected = 0;
@@ -266,7 +284,7 @@ impl App {
         self.task_order.get(self.selected)
     }
 
-#[allow(dead_code)]
+    #[allow(dead_code)]
     fn is_all_done(&self) -> bool {
         self.tasks.values().all(|t| t.state.is_terminal())
     }
@@ -296,7 +314,11 @@ pub async fn run_tui(concurrency: usize, team: Option<TeamManager>) -> Result<()
     result
 }
 
-async fn run_app(terminal: &mut AppTerminal, concurrency: usize, team: Option<TeamManager>) -> Result<()> {
+async fn run_app(
+    terminal: &mut AppTerminal,
+    concurrency: usize,
+    team: Option<TeamManager>,
+) -> Result<()> {
     // Spawn periodic stale-member expiry (every 60s, timeout 90s)
     if let Some(ref tm) = team {
         let tm = tm.clone();
@@ -429,7 +451,10 @@ async fn run_app(terminal: &mut AppTerminal, concurrency: usize, team: Option<Te
                                 app.phase = AppPhase::Running;
                                 app.run_state = RunState::Running;
 
-                                let config = scheduler::SchedulerConfig { max_concurrent: concurrency, team: team.clone() };
+                                let config = scheduler::SchedulerConfig {
+                                    max_concurrent: concurrency,
+                                    team: team.clone(),
+                                };
                                 let sched_cancel = cancel.clone();
                                 let sched_bus = bus.clone();
                                 scheduler_handle = Some(tokio::spawn(async move {
@@ -575,31 +600,22 @@ fn draw_ui(f: &mut Frame, app: &App) {
 
     match &app.phase {
         AppPhase::Input => {
-            let body = Layout::vertical([
-                Constraint::Length(3),
-                Constraint::Min(5),
-            ])
-            .split(chunks[1]);
+            let body =
+                Layout::vertical([Constraint::Length(3), Constraint::Min(5)]).split(chunks[1]);
             draw_input_prompt(f, app, body[0]);
             draw_dashboard(f, app, body[1]);
             draw_input_footer(f, chunks[2]);
         }
         AppPhase::PlanReview => {
-            let body = Layout::horizontal([
-                Constraint::Percentage(50),
-                Constraint::Percentage(50),
-            ])
-            .split(chunks[1]);
+            let body = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(chunks[1]);
             draw_task_list(f, app, body[0]);
             draw_task_detail(f, app, body[1]);
             draw_plan_footer(f, chunks[2]);
         }
         AppPhase::Running | AppPhase::Finished => {
-            let body = Layout::horizontal([
-                Constraint::Percentage(40),
-                Constraint::Percentage(60),
-            ])
-            .split(chunks[1]);
+            let body = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
+                .split(chunks[1]);
             draw_task_list(f, app, body[0]);
             draw_task_detail(f, app, body[1]);
             if app.phase == AppPhase::Finished {
@@ -635,11 +651,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    let border_color = if app.phase == AppPhase::Input && app.team.is_some() && app.members.is_empty() {
-        palette::YELLOW
-    } else {
-        palette::ACCENT
-    };
+    let border_color =
+        if app.phase == AppPhase::Input && app.team.is_some() && app.members.is_empty() {
+            palette::YELLOW
+        } else {
+            palette::ACCENT
+        };
 
     let block = Block::default()
         .title(title)
@@ -707,11 +724,8 @@ fn draw_input_prompt(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
     // Split dashboard: left = team members, right = recent runs
-    let cols = Layout::horizontal([
-        Constraint::Percentage(50),
-        Constraint::Percentage(50),
-    ])
-    .split(area);
+    let cols =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(area);
 
     // ── Team Members ──
     let team_block = Block::default()
@@ -747,14 +761,8 @@ fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled(status_icon.0, Style::default().fg(status_icon.1)),
                 Span::raw(" "),
                 Span::styled(&m.card.name, Style::default().fg(palette::FG)),
-                Span::styled(
-                    format!(" [{}]", m.role),
-                    Style::default().fg(palette::CYAN),
-                ),
-                Span::styled(
-                    format!("  {load}"),
-                    Style::default().fg(palette::MUTED),
-                ),
+                Span::styled(format!(" [{}]", m.role), Style::default().fg(palette::CYAN)),
+                Span::styled(format!("  {load}"), Style::default().fg(palette::MUTED)),
                 Span::styled(
                     format!("  {}", &m.endpoint),
                     Style::default().fg(palette::MUTED),
@@ -777,8 +785,7 @@ fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(runs_block, cols[1]);
 
     if app.recent_runs.is_empty() {
-        let p = Paragraph::new("No runs yet.")
-            .style(Style::default().fg(palette::MUTED));
+        let p = Paragraph::new("No runs yet.").style(Style::default().fg(palette::MUTED));
         f.render_widget(p, runs_inner);
     } else {
         let mut lines = Vec::new();
@@ -840,7 +847,9 @@ fn draw_task_list(f: &mut Frame, app: &App, area: Rect) {
         };
 
         let name_style = if is_selected {
-            Style::default().fg(palette::FG).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(palette::FG)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(palette::FG)
         };
@@ -858,7 +867,9 @@ fn draw_task_list(f: &mut Frame, app: &App, area: Rect) {
 
         // Show dependency arrows
         let dep_indicator = if !tv.depends_on.is_empty() {
-            let dep_names: Vec<&str> = tv.depends_on.iter()
+            let dep_names: Vec<&str> = tv
+                .depends_on
+                .iter()
                 .filter_map(|dep_id| app.tasks.get(dep_id).map(|t| t.name.as_str()))
                 .collect();
             if dep_names.is_empty() {
@@ -905,8 +916,8 @@ fn draw_task_detail(f: &mut Frame, app: &App, area: Rect) {
     let task_id = match app.selected_task_id() {
         Some(id) => id.clone(),
         None => {
-            let hint = Paragraph::new("No task selected")
-                .style(Style::default().fg(palette::MUTED));
+            let hint =
+                Paragraph::new("No task selected").style(Style::default().fg(palette::MUTED));
             f.render_widget(hint, inner);
             return;
         }
@@ -931,9 +942,19 @@ fn draw_task_detail(f: &mut Frame, app: &App, area: Rect) {
     };
 
     lines.push(Line::from(vec![
-        Span::styled(&tv.name, Style::default().fg(palette::FG).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            &tv.name,
+            Style::default()
+                .fg(palette::FG)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("  "),
-        Span::styled(status_text, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            status_text,
+            Style::default()
+                .fg(status_color)
+                .add_modifier(Modifier::BOLD),
+        ),
     ]));
 
     lines.push(Line::from(vec![
@@ -959,14 +980,24 @@ fn draw_task_detail(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(vec![
             Span::styled("Tokens: ", Style::default().fg(palette::MUTED)),
             Span::styled(
-                format!("{}in + {}out = {}{}", tv.input_tokens, tv.output_tokens, total, budget_info),
-                Style::default().fg(if tv.token_budget > 0 && total > tv.token_budget { palette::RED } else { palette::FG }),
+                format!(
+                    "{}in + {}out = {}{}",
+                    tv.input_tokens, tv.output_tokens, total, budget_info
+                ),
+                Style::default().fg(if tv.token_budget > 0 && total > tv.token_budget {
+                    palette::RED
+                } else {
+                    palette::FG
+                }),
             ),
         ]));
     } else if tv.token_budget > 0 {
         lines.push(Line::from(vec![
             Span::styled("Token budget: ", Style::default().fg(palette::MUTED)),
-            Span::styled(format!("{}", tv.token_budget), Style::default().fg(palette::FG)),
+            Span::styled(
+                format!("{}", tv.token_budget),
+                Style::default().fg(palette::FG),
+            ),
         ]));
     }
 
@@ -975,7 +1006,11 @@ fn draw_task_detail(f: &mut Frame, app: &App, area: Rect) {
             Span::styled("Attempts: ", Style::default().fg(palette::MUTED)),
             Span::styled(
                 format!("{}/{}", tv.attempt, tv.max_attempts),
-                Style::default().fg(if tv.attempt > 1 { palette::YELLOW } else { palette::FG }),
+                Style::default().fg(if tv.attempt > 1 {
+                    palette::YELLOW
+                } else {
+                    palette::FG
+                }),
             ),
         ]));
     }
@@ -984,7 +1019,9 @@ fn draw_task_detail(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             "Error:",
-            Style::default().fg(palette::RED).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette::RED)
+                .add_modifier(Modifier::BOLD),
         )));
         for err_line in err.lines().take(5) {
             lines.push(Line::from(Span::styled(
@@ -1029,9 +1066,19 @@ fn draw_input_footer(f: &mut Frame, area: Rect) {
         .style(Style::default().bg(palette::SURFACE));
 
     let p = Paragraph::new(Line::from(vec![
-        Span::styled(" Enter ", Style::default().fg(palette::ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Enter ",
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("submit  ", Style::default().fg(palette::MUTED)),
-        Span::styled(" Ctrl+D ", Style::default().fg(palette::ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Ctrl+D ",
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("quit", Style::default().fg(palette::MUTED)),
     ]))
     .block(block);
@@ -1047,11 +1094,26 @@ fn draw_plan_footer(f: &mut Frame, area: Rect) {
         .style(Style::default().bg(palette::SURFACE));
 
     let p = Paragraph::new(Line::from(vec![
-        Span::styled(" Enter/y ", Style::default().fg(palette::GREEN).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Enter/y ",
+            Style::default()
+                .fg(palette::GREEN)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("approve  ", Style::default().fg(palette::MUTED)),
-        Span::styled(" n/Esc ", Style::default().fg(palette::RED).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " n/Esc ",
+            Style::default()
+                .fg(palette::RED)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("reject  ", Style::default().fg(palette::MUTED)),
-        Span::styled(" ↑↓ ", Style::default().fg(palette::ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " ↑↓ ",
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("navigate", Style::default().fg(palette::MUTED)),
     ]))
     .block(block);
@@ -1067,11 +1129,26 @@ fn draw_running_footer(f: &mut Frame, area: Rect) {
         .style(Style::default().bg(palette::SURFACE));
 
     let p = Paragraph::new(Line::from(vec![
-        Span::styled(" ↑↓ ", Style::default().fg(palette::ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " ↑↓ ",
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("navigate  ", Style::default().fg(palette::MUTED)),
-        Span::styled(" Ctrl+C ", Style::default().fg(palette::RED).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Ctrl+C ",
+            Style::default()
+                .fg(palette::RED)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("cancel  ", Style::default().fg(palette::MUTED)),
-        Span::styled(" q ", Style::default().fg(palette::ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " q ",
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("quit", Style::default().fg(palette::MUTED)),
     ]))
     .block(block);
@@ -1086,17 +1163,35 @@ fn draw_finished_footer(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(if failed > 0 { palette::RED } else { palette::GREEN }))
+        .border_style(Style::default().fg(if failed > 0 {
+            palette::RED
+        } else {
+            palette::GREEN
+        }))
         .style(Style::default().bg(palette::SURFACE));
 
     let p = Paragraph::new(Line::from(vec![
         Span::styled(
             format!(" Done: {completed}/{total} completed, {failed} failed  "),
-            Style::default().fg(if failed > 0 { palette::YELLOW } else { palette::GREEN }),
+            Style::default().fg(if failed > 0 {
+                palette::YELLOW
+            } else {
+                palette::GREEN
+            }),
         ),
-        Span::styled(" Enter ", Style::default().fg(palette::ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Enter ",
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("new run  ", Style::default().fg(palette::MUTED)),
-        Span::styled(" q ", Style::default().fg(palette::ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " q ",
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("quit", Style::default().fg(palette::MUTED)),
     ]))
     .block(block);

@@ -292,7 +292,6 @@ mod tests {
             "---\n\
              name: {agent_name}\n\
              config:\n\
-             \x20 mode: primary\n\
              \x20 cost: free\n\
              \x20 permission_level: {level}\n\
              {permissions_section}\

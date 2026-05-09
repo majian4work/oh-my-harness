@@ -19,9 +19,6 @@ pub enum ModelTier {
     Premium,
 }
 
-/// Legacy alias — kept for backward compatibility in agent frontmatter parsing.
-pub type AgentCost = ModelTier;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AgentMetadata {
     pub avoid_when: Vec<String>,
@@ -272,7 +269,6 @@ pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<Agen
 
     for (key, value) in config {
         match key.as_str() {
-            "mode" => { /* legacy field, ignored */ }
             "cost" | "tier" => tier = parse_model_tier(&value)?,
             "model" => model_id = Some(value),
             "provider" => provider_id = Some(value),
@@ -451,10 +447,6 @@ fn parse_agent_front_matter(content: &str) -> Result<(AgentFrontMatter, &str)> {
             }
             "userinvocable" => {
                 front_matter.user_invocable = parse_bool(value.trim())?;
-            }
-            "candelegateto" => {
-                // legacy field, ignored — delegation is now depth-based
-                let _ = parse_string_list(value.trim(), &mut lines)?;
             }
             "config" => {
                 front_matter.config = parse_nested_key_values(value.trim(), &mut lines)?;
@@ -650,7 +642,6 @@ mod tests {
 name: sample-agent
 description: A sample agent used in tests.
 config:
-  mode: subagent
   cost: cheap
   model: gpt-4o-mini
   max_turns: 30
@@ -694,9 +685,7 @@ Stay focused.
 name: meta-agent
 description: Read-only advisor
 user_invocable: true
-can_delegate_to: []
 config:
-  mode: subagent
   cost: expensive
   model: claude-sonnet-4.6
   max_turns: 50
@@ -738,11 +727,7 @@ You are the meta agent.
             r#"---
 name: sample-agent
 user_invocable: false
-can_delegate_to:
-  - worker
-  - oracle
 config:
-  mode: subagent
   cost: cheap
   model: gpt-4o-mini
 ---
@@ -761,7 +746,6 @@ You are the test agent.
             r#"---
 name: sample-agent
 config:
-  mode: subagent
   cost: cheap
   model: gpt-4o-mini
 ---
