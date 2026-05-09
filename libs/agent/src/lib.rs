@@ -269,7 +269,7 @@ pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<Agen
 
     for (key, value) in config {
         match key.as_str() {
-            "cost" | "tier" => tier = parse_model_tier(&value)?,
+            "tier" => tier = parse_model_tier(&value)?,
             "model" => model_id = Some(value),
             "provider" => provider_id = Some(value),
             "maxturns" => {
@@ -396,7 +396,7 @@ fn parse_model_tier(value: &str) -> Result<ModelTier> {
         "free" | "cheap" => Ok(ModelTier::Cheap),
         "standard" => Ok(ModelTier::Standard),
         "expensive" | "premium" => Ok(ModelTier::Premium),
-        _ => bail!("invalid tier/cost: {value}"),
+        _ => bail!("invalid tier: {value}"),
     }
 }
 
@@ -642,7 +642,7 @@ mod tests {
 name: sample-agent
 description: A sample agent used in tests.
 config:
-  cost: cheap
+  tier: cheap
   model: gpt-4o-mini
   max_turns: 30
 permissions:
@@ -686,7 +686,7 @@ name: meta-agent
 description: Read-only advisor
 user_invocable: true
 config:
-  cost: expensive
+  tier: premium
   model: claude-sonnet-4.6
   max_turns: 50
 avoid_when:
@@ -728,7 +728,7 @@ You are the meta agent.
 name: sample-agent
 user_invocable: false
 config:
-  cost: cheap
+  tier: cheap
   model: gpt-4o-mini
 ---
 You are the test agent.
@@ -746,7 +746,7 @@ You are the test agent.
             r#"---
 name: sample-agent
 config:
-  cost: cheap
+  tier: cheap
   model: gpt-4o-mini
 ---
 You are the test agent.
@@ -840,7 +840,7 @@ You are the test agent.
 name: sample-agent
 user_invocable: true
 config:
-  cost: cheap
+  tier: cheap
 ---
 You are the test agent.
 "#,

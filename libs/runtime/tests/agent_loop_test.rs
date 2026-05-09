@@ -626,7 +626,7 @@ fn agent_markdown_with_delegates(
     _can_delegate_to: &[&str],
 ) -> String {
     format!(
-        "---\nname: {name}\nuser_invocable: {user_invocable}\nconfig:\n  cost: cheap\n  model: mock-model\n  provider: mock\n  permission_level: {permission_level}\n---\n# {name}\nReturn mock provider responses.\n"
+        "---\nname: {name}\nuser_invocable: {user_invocable}\nconfig:\n  tier: cheap\n  model: mock-model\n  provider: mock\n  permission_level: {permission_level}\n---\n# {name}\nReturn mock provider responses.\n"
     )
 }
 
@@ -637,7 +637,7 @@ fn subagent_markdown_with_delegates(
     _can_delegate_to: &[&str],
 ) -> String {
     format!(
-        "---\nname: {name}\nuser_invocable: {user_invocable}\nconfig:\n  cost: cheap\n  model: mock-model\n  provider: mock\n  permission_level: {permission_level}\n---\n# {name}\nReturn mock provider responses.\n"
+        "---\nname: {name}\nuser_invocable: {user_invocable}\nconfig:\n  tier: cheap\n  model: mock-model\n  provider: mock\n  permission_level: {permission_level}\n---\n# {name}\nReturn mock provider responses.\n"
     )
 }
 

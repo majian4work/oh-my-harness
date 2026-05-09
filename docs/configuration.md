@@ -103,7 +103,7 @@ name: my-agent
 description: Short description telling the orchestrator when to delegate here
 user_invocable: true
 config:
-  cost: cheap
+  tier: cheap
   model: gpt-4.1
   provider: openai
   max_turns: 10
@@ -133,7 +133,7 @@ You are a specialized agent that...
 
 | Key                | Values                                     | Default    | Description                                        |
 | ------------------ | ------------------------------------------ | ---------- | -------------------------------------------------- |
-| `cost`             | `free`, `cheap`, `expensive`               | `cheap`    | Influences model selection when no model specified |
+| `tier`             | `cheap`, `standard`, `premium`             | `standard` | Model capability tier for this agent               |
 | `model`            | model ID string                            | —          | Specific model to use                              |
 | `provider`         | provider ID string                         | —          | Specific provider to use                           |
 | `max_turns`        | integer                                    | —          | Maximum tool-call loops per turn                   |
