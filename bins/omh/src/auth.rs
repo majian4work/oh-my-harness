@@ -15,20 +15,6 @@ pub struct Credentials {
     pub providers: HashMap<String, ProviderCredential>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ActiveModel {
-    pub provider_id: String,
-    pub model_id: String,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct OmhConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_model: Option<ActiveModel>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub effort: Option<provider::Effort>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderCredential {
     pub provider_type: ProviderType,
@@ -104,60 +90,6 @@ impl Credentials {
 
     pub fn get(&self, name: &str) -> Option<&ProviderCredential> {
         self.providers.get(name)
-    }
-}
-
-impl OmhConfig {
-    pub fn global_path() -> PathBuf {
-        dirs::config_dir().join("config.toml")
-    }
-
-    pub fn project_path(workspace_root: &std::path::Path) -> PathBuf {
-        workspace_root.join(".omh/config.toml")
-    }
-
-    #[allow(dead_code)]
-    fn load_from(path: &std::path::Path) -> Result<Self> {
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let content = fs::read_to_string(path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))
-    }
-
-    #[allow(dead_code)]
-    pub fn load() -> Result<Self> {
-        let global = Self::load_from(&Self::global_path())?;
-        if let Ok(cwd) = std::env::current_dir() {
-            let project = Self::load_from(&Self::project_path(&cwd))?;
-            Ok(Self {
-                active_model: project.active_model.or(global.active_model),
-                effort: project.effort.or(global.effort),
-            })
-        } else {
-            Ok(global)
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn save(&self) -> Result<()> {
-        self.save_to(&Self::global_path())
-    }
-
-    #[allow(dead_code)]
-    pub fn save_to(&self, path: &std::path::Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let content = toml::to_string_pretty(self)?;
-        fs::write(path, content)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-        }
-        Ok(())
     }
 }
 

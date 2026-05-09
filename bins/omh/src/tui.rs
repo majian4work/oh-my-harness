@@ -200,7 +200,8 @@ impl App {
     fn new() -> Result<Self> {
         let mut harness = crate::init_harness()?;
         crate::run::register_providers_from_env(&mut harness)?;
-        let defaults = crate::run::resolve_defaults(&harness);
+        let workspace_root = std::env::current_dir().unwrap_or_default();
+        let defaults = runtime::config::resolve_defaults(&harness, &workspace_root);
         let provider_id = defaults.provider_id;
         let model_id = defaults.model_id;
         let effort = defaults.effort;
@@ -209,7 +210,7 @@ impl App {
 
         {
             let harness = Arc::clone(&harness);
-            let workspace_root = std::env::current_dir().unwrap_or_default();
+            let workspace_root = workspace_root.clone();
             tokio::task::spawn_blocking(move || {
                 harness.connect_mcp_servers(&workspace_root);
             });

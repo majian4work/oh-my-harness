@@ -865,9 +865,13 @@ impl AgentRuntime {
         }
 
         // Evolution: periodic extraction + consolidation (best-effort)
-        // Only run at consolidation intervals to avoid per-turn LLM overhead.
+        // Heuristics: skip if session is too short or shallow.
+        //  - consolidation_interval gates frequency (default 50 turns)
+        //  - require ≥5 tool calls (indicates non-trivial work)
+        //  - require ≥6 messages (3+ exchanges, not a one-shot question)
+        let enough_depth = total_tool_calls >= 5 && messages.len() >= 6;
         if completed
-            && total_tool_calls >= 3
+            && enough_depth
             && self.current_turn % harness.evolution.policy().consolidation_interval == 0
         {
             let scope = Scope::Agent(executing_agent_name.clone());

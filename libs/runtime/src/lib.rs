@@ -1,5 +1,6 @@
 pub mod agent_runtime;
 pub mod background;
+pub mod config;
 pub mod harness;
 pub mod session_logger;
 pub mod session_runtime;

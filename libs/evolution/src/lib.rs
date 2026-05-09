@@ -54,7 +54,7 @@ impl Default for EvolutionPolicy {
             max_rules_per_scope: 50,
             min_confidence_to_inject: 0.6,
             require_reinforcement_count: 2,
-            consolidation_interval: 10,
+            consolidation_interval: 50,
             extraction_model: "gpt-4o-mini".to_string(),
         }
     }
@@ -700,7 +700,7 @@ mod tests {
         assert_eq!(policy.max_rules_per_scope, 50);
         assert!((policy.min_confidence_to_inject - 0.6).abs() < f32::EPSILON);
         assert_eq!(policy.require_reinforcement_count, 2);
-        assert_eq!(policy.consolidation_interval, 10);
+        assert_eq!(policy.consolidation_interval, 50);
         assert_eq!(policy.extraction_model, "gpt-4o-mini");
     }
 
