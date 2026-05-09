@@ -47,6 +47,8 @@ pub struct OpenAIChatCompletionRequest {
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<OpenAIStreamOptions>,
@@ -228,7 +230,14 @@ pub struct ResponsesApiRequest {
     pub tools: Option<Vec<ResponsesTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ResponsesReasoning>,
     pub stream: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResponsesReasoning {
+    pub effort: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -417,13 +426,31 @@ pub fn build_chat_payload(
         (request.max_tokens, None)
     };
 
+    let reasoning_effort = if needs_max_completion_tokens(&model) {
+        match request.effort {
+            crate::Effort::Low => Some("low".to_string()),
+            crate::Effort::Default => None,
+            crate::Effort::High => Some("high".to_string()),
+        }
+    } else {
+        None
+    };
+
+    // Reasoning models don't support temperature
+    let temperature = if reasoning_effort.is_some() {
+        None
+    } else {
+        request.temperature
+    };
+
     OpenAIChatCompletionRequest {
         model,
         messages,
         tools: (!request.tools.is_empty()).then(|| request.tools.iter().map(map_tool).collect()),
-        temperature: request.temperature,
+        temperature,
         max_tokens,
         max_completion_tokens,
+        reasoning_effort,
         stream,
         stream_options: stream.then_some(OpenAIStreamOptions {
             include_usage: true,
@@ -536,11 +563,22 @@ pub fn build_responses_payload(
         )
     };
 
+    let reasoning = match request.effort {
+        crate::Effort::Low => Some(ResponsesReasoning {
+            effort: "low".to_string(),
+        }),
+        crate::Effort::Default => None,
+        crate::Effort::High => Some(ResponsesReasoning {
+            effort: "high".to_string(),
+        }),
+    };
+
     ResponsesApiRequest {
         model,
         input,
         tools,
         max_output_tokens: request.max_tokens,
+        reasoning,
         stream,
     }
 }

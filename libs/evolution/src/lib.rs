@@ -121,6 +121,7 @@ impl EvolutionEngine {
             tools: Vec::new(),
             temperature: Some(0.0),
             max_tokens: Some(800),
+            effort: provider::Effort::Default,
         };
 
         PreparedExtraction {

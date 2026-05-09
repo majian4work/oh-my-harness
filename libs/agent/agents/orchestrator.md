@@ -11,8 +11,7 @@ can_delegate_to:
   - reviewer
 config:
   mode: primary
-  cost: expensive
-  model: claude-opus-4.6
+  tier: premium
   max_turns: 200
   temperature: 0.2
   permission_level: FullAccess

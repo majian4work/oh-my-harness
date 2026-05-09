@@ -104,6 +104,9 @@ enum Mode {
         /// Agent to use
         #[arg(short, long, default_value = "orchestrator")]
         agent: String,
+        /// Reasoning effort level: low, default, high
+        #[arg(long, default_value = "default")]
+        effort: String,
     },
     /// Provider authentication management
     #[command(subcommand)]
@@ -145,7 +148,11 @@ async fn main() -> Result<()> {
             omh_trace::init(log_level);
             match args.mode.unwrap() {
                 Mode::Tui { .. } => unreachable!(),
-                Mode::Run { prompt, agent } => run_oneshot(&prompt, &agent, args.r#continue).await,
+                Mode::Run {
+                    prompt,
+                    agent,
+                    effort,
+                } => run_oneshot(&prompt, &agent, args.r#continue, &effort).await,
                 Mode::Sessions { limit } => cmd_sessions(limit).await,
                 Mode::Memory(cmd) => cmd_memory(cmd).await,
                 Mode::Evolution(cmd) => cmd_evolution(cmd).await,

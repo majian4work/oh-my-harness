@@ -47,6 +47,7 @@ dependencies = [
  "dirs",
  "glob",
  "permission",
+ "provider",
  "regex",
  "serde",
  "serde_json",

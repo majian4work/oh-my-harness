@@ -5,8 +5,7 @@ user_invocable: true
 can_delegate_to: []
 config:
   mode: subagent
-  cost: expensive
-  model: claude-sonnet-4.6
+  tier: premium
   max_turns: 50
   temperature: 0.1
 use_when:

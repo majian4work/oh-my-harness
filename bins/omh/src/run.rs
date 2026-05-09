@@ -8,7 +8,12 @@ use crate::{auth, init_harness};
 /// Default omt endpoint to probe.
 const DEFAULT_OMT_ENDPOINT: &str = "http://127.0.0.1:9120";
 
-pub async fn run_oneshot(prompt: &str, agent: &str, continue_last: bool) -> Result<()> {
+pub async fn run_oneshot(
+    prompt: &str,
+    agent: &str,
+    continue_last: bool,
+    effort: &str,
+) -> Result<()> {
     let mut harness = init_harness()?;
     register_providers_from_env(&mut harness)?;
 
@@ -49,6 +54,12 @@ pub async fn run_oneshot(prompt: &str, agent: &str, continue_last: bool) -> Resu
             .id
     };
 
+    let effort_level = match effort {
+        "low" => provider::Effort::Low,
+        "high" => provider::Effort::High,
+        _ => provider::Effort::Default,
+    };
+
     let runtime = AgentRuntime::new(
         agent.to_string(),
         session_id.clone(),
@@ -56,6 +67,7 @@ pub async fn run_oneshot(prompt: &str, agent: &str, continue_last: bool) -> Resu
     );
     let mut runtime = runtime.with_logger(&harness);
     runtime.interactive = false;
+    runtime.effort_override = Some(effort_level).filter(|e| *e != provider::Effort::Default);
 
     let start = std::time::Instant::now();
     let result = runtime.run_turn(&harness, prompt).await?;
@@ -135,10 +147,7 @@ fn try_join_omt_team(agent: &str) -> tokio::task::JoinHandle<()> {
 
         match client.team_join(&omt_url, &request).await {
             Ok(resp) if resp.accepted => {
-                tracing::info!(
-                    "joined omt team as {:?} (role={role})",
-                    resp.instance_id
-                );
+                tracing::info!("joined omt team as {:?} (role={role})", resp.instance_id);
             }
             Ok(resp) => {
                 tracing::debug!(

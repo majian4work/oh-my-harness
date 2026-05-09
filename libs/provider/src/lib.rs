@@ -18,6 +18,17 @@ pub enum ModelCostTier {
     High,
 }
 
+/// Provider-agnostic reasoning effort level.
+/// Maps to provider-specific parameters at the adapter layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Effort {
+    Low,
+    #[default]
+    Default,
+    High,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSpec {
     pub model_id: String,
@@ -58,6 +69,8 @@ pub struct CompletionRequest {
     pub tools: Vec<ToolDefinition>,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
+    #[serde(default)]
+    pub effort: Effort,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +133,7 @@ pub trait Provider: Send + Sync {
             tools: vec![],
             max_tokens: Some(1),
             temperature: None,
+            effort: Effort::Default,
         };
         self.complete(request).await.is_ok()
     }

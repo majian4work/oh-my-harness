@@ -853,6 +853,7 @@ impl App {
                 tools: vec![],
                 max_tokens: Some(30),
                 temperature: Some(0.3),
+                effort: provider::Effort::Default,
             };
 
             let resolved = harness.provider_registry.resolve_model(

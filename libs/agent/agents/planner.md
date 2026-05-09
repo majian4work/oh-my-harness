@@ -5,10 +5,10 @@ user_invocable: true
 can_delegate_to: []
 config:
   mode: primary
-  cost: expensive
-  model: claude-opus-4.6
+  tier: premium
   max_turns: 80
   temperature: 0.1
+  effort: high
 use_when:
   - The user asks for a plan before implementation.
 avoid_when:

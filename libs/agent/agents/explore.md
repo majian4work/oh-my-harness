@@ -5,10 +5,10 @@ user_invocable: true
 can_delegate_to: []
 config:
   mode: subagent
-  cost: free
-  model: claude-haiku-4.5
+  tier: cheap
   max_turns: 30
   temperature: 0.0
+  effort: low
 use_when:
   - You need fast local codebase search, file discovery, or lightweight context gathering.
 avoid_when:

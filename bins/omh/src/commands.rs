@@ -369,8 +369,8 @@ pub async fn cmd_update_best_models(global: bool) -> Result<()> {
             .map(|m| m.model_id.as_str())
             .unwrap_or("none");
         agent_info.push_str(&format!(
-            "- {} ({:?}): {}, cost={:?}, current_model={}\n",
-            a.name, a.mode, a.description, a.cost, current_model
+            "- {} ({:?}): {}, tier={:?}, current_model={}\n",
+            a.name, a.mode, a.description, a.tier, current_model
         ));
     }
 
@@ -419,6 +419,7 @@ pub async fn cmd_update_best_models(global: bool) -> Result<()> {
         tools: vec![],
         temperature: Some(0.0),
         max_tokens: Some(2000),
+        effort: provider::Effort::Default,
     };
 
     let response = provider.complete(request).await?;

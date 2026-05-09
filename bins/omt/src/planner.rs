@@ -102,6 +102,7 @@ async fn plan_with_llm(provider: &dyn Provider, prompt: &str) -> Result<Vec<OmtT
         tools: vec![],
         temperature: Some(0.0),
         max_tokens: Some(4096),
+        effort: provider::Effort::Default,
     };
 
     let resp = provider

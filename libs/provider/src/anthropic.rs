@@ -61,6 +61,21 @@ impl AnthropicProvider {
     }
 
     fn build_payload(&self, request: &CompletionRequest, stream: bool) -> AnthropicMessagesRequest {
+        let thinking = match request.effort {
+            crate::Effort::High => Some(AnthropicThinking {
+                kind: "enabled".to_string(),
+                budget_tokens: 10000,
+            }),
+            _ => None,
+        };
+
+        // When thinking is enabled, temperature must be 1.0 per Anthropic API requirements
+        let temperature = if thinking.is_some() {
+            Some(1.0)
+        } else {
+            request.temperature
+        };
+
         AnthropicMessagesRequest {
             model: self.effective_model(request),
             system: (!request.system.is_empty()).then(|| {
@@ -83,9 +98,10 @@ impl AnthropicProvider {
                 .collect::<Vec<_>>(),
             tools: (!request.tools.is_empty())
                 .then(|| request.tools.iter().map(Self::map_tool).collect::<Vec<_>>()),
-            temperature: request.temperature,
+            temperature,
             max_tokens: request.max_tokens.unwrap_or(4096),
             stream,
+            thinking,
         }
     }
 
@@ -471,6 +487,15 @@ struct AnthropicMessagesRequest {
     temperature: Option<f32>,
     max_tokens: u32,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<AnthropicThinking>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AnthropicThinking {
+    #[serde(rename = "type")]
+    kind: String,
+    budget_tokens: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]

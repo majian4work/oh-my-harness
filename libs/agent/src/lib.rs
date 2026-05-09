@@ -14,12 +14,19 @@ pub enum AgentMode {
     Subagent,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AgentCost {
-    Free,
+/// Model capability tier — declares what level of model an agent needs.
+/// Maps to a concrete model via ModelProfiles in config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelTier {
     Cheap,
-    Expensive,
+    #[default]
+    Standard,
+    Premium,
 }
+
+/// Legacy alias — kept for backward compatibility in agent frontmatter parsing.
+pub type AgentCost = ModelTier;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AgentMetadata {
@@ -67,7 +74,7 @@ pub struct AgentDefinition {
     pub name: String,
     pub description: String,
     pub mode: AgentMode,
-    pub cost: AgentCost,
+    pub tier: ModelTier,
     #[serde(default = "default_user_invocable")]
     pub user_invocable: bool,
     #[serde(default)]
@@ -77,6 +84,8 @@ pub struct AgentDefinition {
     pub permission_rules: PermissionPolicy,
     pub max_turns: Option<u32>,
     pub temperature: Option<f32>,
+    #[serde(default)]
+    pub effort: provider::Effort,
     pub metadata: AgentMetadata,
     pub source: AgentSource,
 }
@@ -93,14 +102,6 @@ impl AgentDefinition {
     pub fn allows_delegation_to(&self, agent_name: &str) -> bool {
         self.can_delegate_to.iter().any(|name| name == agent_name)
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Category {
-    pub name: String,
-    pub description: String,
-    pub model: ModelSpec,
-    pub temperature: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -298,17 +299,18 @@ pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<Agen
     let triggers = front_matter.triggers;
 
     let mut mode = AgentMode::Subagent;
-    let mut cost = AgentCost::Cheap;
+    let mut tier = ModelTier::Standard;
     let mut model_id = None;
     let mut provider_id = None;
     let mut max_turns = None;
     let mut temperature = None;
+    let mut effort = provider::Effort::Default;
     let mut permission_level = PermissionLevel::ReadOnly;
 
     for (key, value) in config {
         match key.as_str() {
             "mode" => mode = parse_agent_mode(&value)?,
-            "cost" => cost = parse_agent_cost(&value)?,
+            "cost" | "tier" => tier = parse_model_tier(&value)?,
             "model" => model_id = Some(value),
             "provider" => provider_id = Some(value),
             "maxturns" => {
@@ -325,6 +327,7 @@ pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<Agen
                         .with_context(|| format!("invalid temperature value: {value}"))?,
                 )
             }
+            "effort" => effort = parse_effort(&value)?,
             "permissionlevel" => permission_level = parse_permission_level(&value)?,
             other => bail!("unsupported config key: {other}"),
         }
@@ -363,7 +366,7 @@ pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<Agen
         name,
         description,
         mode,
-        cost,
+        tier,
         user_invocable: front_matter.user_invocable,
         can_delegate_to: front_matter.can_delegate_to,
         system_prompt,
@@ -374,6 +377,7 @@ pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<Agen
         permission_rules,
         max_turns,
         temperature,
+        effort,
         metadata: AgentMetadata {
             use_when,
             avoid_when,
@@ -401,60 +405,6 @@ pub fn builtin_agent_definitions() -> Vec<AgentDefinition> {
                 .expect("builtin agent markdown is invalid")
         })
         .collect()
-}
-
-pub fn default_categories() -> Vec<Category> {
-    vec![
-        Category {
-            name: "quick".to_string(),
-            description: "Fast, low-cost execution for straightforward tasks.".to_string(),
-            model: model("claude-haiku-4.5"),
-            temperature: Some(0.2),
-        },
-        Category {
-            name: "deep".to_string(),
-            description: "Higher-depth reasoning for complex implementation work.".to_string(),
-            model: model("claude-opus-4.6"),
-            temperature: Some(0.2),
-        },
-        Category {
-            name: "visual-engineering".to_string(),
-            description: "UI, interaction, and visual product engineering tasks.".to_string(),
-            model: model("claude-sonnet-4.6"),
-            temperature: Some(0.3),
-        },
-        Category {
-            name: "ultrabrain".to_string(),
-            description: "Maximum-effort analysis for the hardest problems.".to_string(),
-            model: model("claude-opus-4.6"),
-            temperature: Some(0.1),
-        },
-        Category {
-            name: "artistry".to_string(),
-            description: "Creative ideation and style-sensitive generation.".to_string(),
-            model: model("claude-sonnet-4.5"),
-            temperature: Some(0.8),
-        },
-        Category {
-            name: "writing".to_string(),
-            description: "Editorial writing, summaries, and communication tasks.".to_string(),
-            model: model("claude-sonnet-4.6"),
-            temperature: Some(0.6),
-        },
-        Category {
-            name: "unspecified-low".to_string(),
-            description: "Fallback low-cost category when no better match exists.".to_string(),
-            model: model("claude-haiku-4.5"),
-            temperature: Some(0.3),
-        },
-        Category {
-            name: "unspecified-high".to_string(),
-            description: "Fallback high-capability category when no better match exists."
-                .to_string(),
-            model: model("claude-sonnet-4.6"),
-            temperature: Some(0.3),
-        },
-    ]
 }
 
 pub fn generate_orchestrator_prompt(registry: &AgentRegistry) -> String {
@@ -485,7 +435,7 @@ pub fn generate_orchestrator_prompt(registry: &AgentRegistry) -> String {
         lines.push(format!(
             "| {} | {} | {} | {} | {} | {} |",
             agent.name,
-            format_cost(agent.cost),
+            format_cost(agent.tier),
             sanitize_table_cell(&agent.description),
             sanitize_table_cell(&use_when),
             sanitize_table_cell(&avoid_when),
@@ -504,12 +454,21 @@ fn parse_agent_mode(value: &str) -> Result<AgentMode> {
     }
 }
 
-fn parse_agent_cost(value: &str) -> Result<AgentCost> {
+fn parse_model_tier(value: &str) -> Result<ModelTier> {
     match normalize_key(value).as_str() {
-        "free" => Ok(AgentCost::Free),
-        "cheap" => Ok(AgentCost::Cheap),
-        "expensive" => Ok(AgentCost::Expensive),
-        _ => bail!("invalid agent cost: {value}"),
+        "free" | "cheap" => Ok(ModelTier::Cheap),
+        "standard" => Ok(ModelTier::Standard),
+        "expensive" | "premium" => Ok(ModelTier::Premium),
+        _ => bail!("invalid tier/cost: {value}"),
+    }
+}
+
+fn parse_effort(value: &str) -> Result<provider::Effort> {
+    match normalize_key(value).as_str() {
+        "low" => Ok(provider::Effort::Low),
+        "default" => Ok(provider::Effort::Default),
+        "high" => Ok(provider::Effort::High),
+        _ => bail!("invalid effort: {value}"),
     }
 }
 
@@ -699,18 +658,11 @@ fn sanitize_table_cell(value: &str) -> String {
     value.replace('|', "\\|").replace('\n', " ")
 }
 
-fn format_cost(cost: AgentCost) -> &'static str {
-    match cost {
-        AgentCost::Free => "Free",
-        AgentCost::Cheap => "Cheap",
-        AgentCost::Expensive => "Expensive",
-    }
-}
-
-fn model(model_id: impl Into<String>) -> ModelSpec {
-    ModelSpec {
-        model_id: model_id.into(),
-        provider_id: None,
+fn format_cost(tier: ModelTier) -> &'static str {
+    match tier {
+        ModelTier::Cheap => "Cheap",
+        ModelTier::Standard => "Standard",
+        ModelTier::Premium => "Premium",
     }
 }
 

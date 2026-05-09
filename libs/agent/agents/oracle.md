@@ -5,10 +5,10 @@ user_invocable: true
 can_delegate_to: []
 config:
   mode: subagent
-  cost: expensive
-  model: claude-sonnet-4.6
+  tier: premium
   max_turns: 50
   temperature: 0.1
+  effort: high
 use_when:
   - You need architectural guidance, debugging analysis, or a second opinion.
   - The task benefits from read-only reasoning before implementation.

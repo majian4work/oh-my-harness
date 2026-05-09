@@ -5,8 +5,7 @@ user_invocable: true
 can_delegate_to: []
 config:
   mode: subagent
-  cost: cheap
-  model: claude-sonnet-4.5
+  tier: standard
   max_turns: 60
   temperature: 0.2
   permission_level: WorkspaceWrite

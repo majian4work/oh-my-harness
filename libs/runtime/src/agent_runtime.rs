@@ -29,6 +29,7 @@ pub struct AgentRuntime {
     pub max_turns: u32,
     pub current_turn: u32,
     pub model_override: Option<ModelSpec>,
+    pub effort_override: Option<provider::Effort>,
     pub interactive: bool,
     pub turn_routing: TurnRouting,
     pub shared_harness: Option<std::sync::Arc<Harness>>,
@@ -100,6 +101,7 @@ impl AgentRuntime {
             max_turns,
             current_turn: 0,
             model_override: None,
+            effort_override: None,
             interactive: true,
             turn_routing: TurnRouting::default(),
             shared_harness: None,
@@ -179,6 +181,7 @@ impl AgentRuntime {
             tools: vec![],
             max_tokens: Some(1024),
             temperature: Some(0.0),
+            effort: provider::Effort::Default,
         };
 
         match provider.complete(request).await {
@@ -234,6 +237,7 @@ impl AgentRuntime {
             tools: vec![],
             max_tokens: Some(50),
             temperature: Some(0.0),
+            effort: provider::Effort::Default,
         };
 
         let resp = match provider.complete(request).await {
@@ -278,7 +282,7 @@ impl AgentRuntime {
         }
         let delegation_policy = self.turn_routing.delegation_policy();
 
-        let cost_hint = Some(agent_cost_to_tier(agent.cost));
+        let cost_hint = Some(agent_tier_to_model_tier(agent.tier));
 
         let override_spec = self.model_override.clone();
         let config_spec = harness
@@ -442,6 +446,7 @@ impl AgentRuntime {
                 tools: tools.clone(),
                 temperature: agent.temperature,
                 max_tokens: None,
+                effort: self.effort_override.unwrap_or(agent.effort),
             };
 
             dump_turn(
@@ -1091,10 +1096,11 @@ fn execute_spawn_agent<'a>(
     })
 }
 
-fn agent_cost_to_tier(cost: agent::AgentCost) -> ModelCostTier {
-    match cost {
-        agent::AgentCost::Free | agent::AgentCost::Cheap => ModelCostTier::Low,
-        agent::AgentCost::Expensive => ModelCostTier::High,
+fn agent_tier_to_model_tier(tier: agent::ModelTier) -> ModelCostTier {
+    match tier {
+        agent::ModelTier::Cheap => ModelCostTier::Low,
+        agent::ModelTier::Standard => ModelCostTier::Medium,
+        agent::ModelTier::Premium => ModelCostTier::High,
     }
 }
 
