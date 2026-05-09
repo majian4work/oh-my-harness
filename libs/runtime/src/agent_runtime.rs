@@ -345,10 +345,6 @@ impl AgentRuntime {
         let session = harness.session_manager.get(&self.session_id)?;
         let dump_dir = harness.session_manager.dump_dir(&self.session_id);
 
-        // Restore persisted turn counter so dumps don't overwrite across run_turn calls.
-        let mut session_state = harness.session_manager.load_state(&self.session_id);
-        self.current_turn = session_state.turn_counter;
-
         let memory_scopes = vec![
             Scope::Agent(executing_agent_name.clone()),
             Scope::Project(session.workspace_root.to_string_lossy().into_owned()),
@@ -952,12 +948,6 @@ impl AgentRuntime {
                 error: Some(error.to_string()),
             },
         };
-
-        // Persist updated turn counter.
-        session_state.turn_counter = self.current_turn;
-        if let Err(e) = harness.session_manager.save_state(&self.session_id, &session_state) {
-            tracing::warn!(session_id = %self.session_id, error = %e, "failed to persist session state");
-        }
 
         let telemetry_path = harness.session_manager.telemetry_path(&self.session_id);
         if let Err(error) = telemetry.append_jsonl(&telemetry_path) {

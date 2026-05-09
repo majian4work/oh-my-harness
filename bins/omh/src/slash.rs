@@ -10,6 +10,8 @@ pub enum SlashResult {
     ListModels { force_refresh: bool },
     ListAgents,
     ListNotifications,
+    SwitchAgent(String),
+    SwitchEffort(provider::Effort),
 }
 
 pub fn dispatch(invocation: &SlashInvocation, workspace_root: &Path) -> Result<SlashResult> {
@@ -22,6 +24,8 @@ pub fn dispatch(invocation: &SlashInvocation, workspace_root: &Path) -> Result<S
             Ok(SlashResult::ListModels { force_refresh })
         }
         "agents" => Ok(SlashResult::ListAgents),
+        "agent" => dispatch_agent(args),
+        "effort" => dispatch_effort(args),
         "notifications" => Ok(SlashResult::ListNotifications),
         "evolution" | "evolve" => dispatch_evolution(args),
         "skills" => list_skills(workspace_root),
@@ -114,6 +118,31 @@ fn show_skill(name: &str, workspace_root: &Path) -> Result<SlashResult> {
                 )))
             }
         }
+    }
+}
+
+fn dispatch_agent(args: &str) -> Result<SlashResult> {
+    let name = args.trim();
+    if name.is_empty() {
+        return Ok(SlashResult::Notify(
+            "Usage: /agent <name>\nUse /agents to list available agents.".to_string(),
+        ));
+    }
+    Ok(SlashResult::SwitchAgent(name.to_string()))
+}
+
+fn dispatch_effort(args: &str) -> Result<SlashResult> {
+    let level = args.trim().to_lowercase();
+    match level.as_str() {
+        "low" => Ok(SlashResult::SwitchEffort(provider::Effort::Low)),
+        "default" => Ok(SlashResult::SwitchEffort(provider::Effort::Default)),
+        "high" => Ok(SlashResult::SwitchEffort(provider::Effort::High)),
+        "" => Ok(SlashResult::Notify(
+            "Usage: /effort <low|default|high>".to_string(),
+        )),
+        other => Ok(SlashResult::Notify(format!(
+            "Unknown effort level: {other}\nAvailable: low, default, high"
+        ))),
     }
 }
 

@@ -58,6 +58,9 @@ pub struct SessionState {
     /// Monotonically increasing turn counter across all run_turn invocations.
     #[serde(default)]
     pub turn_counter: u32,
+    /// The currently active foreground agent for this session.
+    #[serde(default)]
+    pub foreground_agent: Option<String>,
 }
 
 pub struct SessionManager {

@@ -25,6 +25,8 @@ pub struct ActiveModel {
 pub struct OmhConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_model: Option<ActiveModel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<provider::Effort>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +133,7 @@ impl OmhConfig {
             let project = Self::load_from(&Self::project_path(&cwd))?;
             Ok(Self {
                 active_model: project.active_model.or(global.active_model),
+                effort: project.effort.or(global.effort),
             })
         } else {
             Ok(global)

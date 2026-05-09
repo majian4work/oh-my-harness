@@ -30,6 +30,7 @@ use unicode_width::UnicodeWidthStr;
 
 use provider::{ModelInfo, ModelSpec};
 use runtime::AgentRuntime;
+use runtime::SessionRuntime;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
@@ -205,6 +206,8 @@ struct App {
     msg_max_scroll: u16,
     loading_models: bool,
     pending_approval: Option<bus::ApprovalRequest>,
+    effort: provider::Effort,
+    foreground_agent: String,
 }
 
 impl App {
@@ -212,6 +215,10 @@ impl App {
         let mut harness = crate::init_harness()?;
         crate::run::register_providers_from_env(&mut harness)?;
         let (provider_id, model_id) = resolve_active_model(&harness);
+        let effort = OmhConfig::load()
+            .ok()
+            .and_then(|c| c.effort)
+            .unwrap_or_default();
         let bus_rx = Some(harness.bus.subscribe());
         let harness = Arc::new(harness);
 
@@ -260,6 +267,8 @@ impl App {
             msg_max_scroll: 0,
             loading_models: false,
             pending_approval: None,
+            effort,
+            foreground_agent: DEFAULT_AGENT.to_string(),
         };
         app.refresh_status();
         Ok(app)
@@ -291,6 +300,8 @@ impl App {
                 return;
             }
         };
+        // New sessions always start with the default agent.
+        self.foreground_agent = DEFAULT_AGENT.to_string();
         match harness
             .session_manager
             .create(DEFAULT_AGENT, &self.model_id, &workspace_root)
@@ -311,6 +322,11 @@ impl App {
     fn load_session(&mut self, session_id: &str) {
         let Some(harness) = &self.harness else { return };
         self.title_generated = true;
+        // Restore foreground agent from persisted session state.
+        let state = harness.session_manager.load_state(session_id);
+        self.foreground_agent = state
+            .foreground_agent
+            .unwrap_or_else(|| DEFAULT_AGENT.to_string());
         match harness.session_manager.get(session_id) {
             Ok(session) => {
                 self.session_id = Some(session.id.clone());
@@ -750,9 +766,8 @@ impl App {
             provider_id: provider_id.to_string(),
             model_id: model_id.to_string(),
         };
-        let config = OmhConfig {
-            active_model: Some(active),
-        };
+        let mut config = OmhConfig::load().unwrap_or_default();
+        config.active_model = Some(active);
         config.save()?;
         if let Ok(cwd) = std::env::current_dir() {
             let _ = config.save_to(&OmhConfig::project_path(&cwd));
@@ -764,6 +779,20 @@ impl App {
             "system",
             format!("✓ Active model set to {provider_id}/{model_id}"),
         ));
+        Ok(())
+    }
+
+    fn save_effort(&self, effort: provider::Effort) -> Result<()> {
+        let mut config = OmhConfig::load().unwrap_or_default();
+        config.effort = if effort == provider::Effort::Default {
+            None
+        } else {
+            Some(effort)
+        };
+        config.save()?;
+        if let Ok(cwd) = std::env::current_dir() {
+            let _ = config.save_to(&OmhConfig::project_path(&cwd));
+        }
         Ok(())
     }
 
@@ -932,19 +961,16 @@ impl App {
                     .publish(bus::AgentEvent::TurnComplete { session_id });
             });
         } else {
-            // Normal flow: run default foreground agent
-            let agent_name = DEFAULT_AGENT.to_string();
-            let max_turns = harness
-                .agent_registry
-                .get(DEFAULT_AGENT)
-                .and_then(|agent| agent.max_turns)
-                .unwrap_or(30);
+            // Normal flow: run foreground agent via SessionRuntime
+            let effort_override = if self.effort == provider::Effort::Default {
+                None
+            } else {
+                Some(self.effort)
+            };
             tokio::spawn(async move {
-                let runtime = AgentRuntime::new(agent_name, session_id.clone(), max_turns);
-                let mut runtime = runtime.with_logger(&harness);
-                runtime.model_override = Some(model_override);
-                runtime.shared_harness = Some(harness.clone());
-                if let Err(error) = runtime.run_turn(&harness, &text).await {
+                let mut sr = SessionRuntime::new(session_id.clone(), harness.clone());
+                let result = sr.run_turn(&text, model_override, effort_override).await;
+                if let Err(error) = result {
                     harness.bus.publish(bus::AgentEvent::Error {
                         session_id: Some(session_id.clone()),
                         message: error.to_string(),
@@ -1602,6 +1628,43 @@ impl App {
                                 self.messages
                                     .push(ChatMessage::new("system", "No notifications."));
                             }
+                            Ok(SlashResult::SwitchAgent(name)) => {
+                                if let Some(harness) = &self.harness {
+                                    if harness.agent_registry.get(&name).is_none() {
+                                        self.messages.push(ChatMessage::new(
+                                            "system",
+                                            format!("Unknown agent: {name}\nUse /agents to list available agents."),
+                                        ));
+                                    } else {
+                                        self.foreground_agent = name.clone();
+                                        // Persist to session state
+                                        if let Some(sid) = &self.session_id {
+                                            let mut state = harness.session_manager.load_state(sid);
+                                            state.foreground_agent = Some(name.clone());
+                                            let _ = harness.session_manager.save_state(sid, &state);
+                                        }
+                                        self.messages.push(ChatMessage::new(
+                                            "system",
+                                            format!("✓ Switched to agent: {name}"),
+                                        ));
+                                    }
+                                }
+                            }
+                            Ok(SlashResult::SwitchEffort(level)) => {
+                                self.effort = level;
+                                // Persist to config file
+                                if let Err(e) = self.save_effort(level) {
+                                    self.messages.push(ChatMessage::new(
+                                        "system",
+                                        format!("Error saving effort: {e}"),
+                                    ));
+                                } else {
+                                    self.messages.push(ChatMessage::new(
+                                        "system",
+                                        format!("✓ Effort set to {level:?}"),
+                                    ));
+                                }
+                            }
                             Err(e) => {
                                 self.messages
                                     .push(ChatMessage::new("system", format!("Error: {e}")));
@@ -2253,15 +2316,25 @@ impl App {
             Span::styled("quit ", Style::default().fg(palette::MUTED)),
         ]);
 
-        // Build footer left title: agent │ provider/model
-        let agent_label = format!(" 🤖 {} ", DEFAULT_AGENT);
+        // Build footer left title: agent │ provider/model │ effort
+        let agent_label = format!(" 🤖 {} ", self.foreground_agent);
         let model_label = format!("{}/{} ", self.provider_id, self.model_id);
+        let effort_label = match self.effort {
+            provider::Effort::Low => "⚡low ",
+            provider::Effort::Default => "",
+            provider::Effort::High => "🧠high ",
+        };
         let sep = "│ ";
-        let footer_title = Line::from(vec![
+        let mut footer_spans = vec![
             Span::styled(agent_label, Style::default().fg(palette::CYAN)),
             Span::styled(sep, Style::default().fg(palette::BORDER)),
             Span::styled(model_label, Style::default().fg(palette::MUTED)),
-        ]);
+        ];
+        if !effort_label.is_empty() {
+            footer_spans.push(Span::styled(sep, Style::default().fg(palette::BORDER)));
+            footer_spans.push(Span::styled(effort_label, Style::default().fg(palette::YELLOW)));
+        }
+        let footer_title = Line::from(footer_spans);
 
         let input_widget = Paragraph::new(input_display.as_str())
             .block(
