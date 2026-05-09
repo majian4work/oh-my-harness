@@ -102,7 +102,6 @@ All metadata lives in the YAML front matter. The Markdown body after the closing
 name: my-agent
 description: Short description telling the orchestrator when to delegate here
 user_invocable: true
-can_delegate_to: []
 config:
   mode: subagent
   cost: cheap
@@ -115,9 +114,6 @@ permissions:
   allow: read_file, glob, grep
   deny: bash
   ask: write_file, edit_file
-use_when:
-  - Task requires specialized domain knowledge
-  - User explicitly requests this agent
 avoid_when:
   - Simple tasks that don't need specialization
 triggers:
@@ -133,7 +129,6 @@ You are a specialized agent that...
 | `name`            | string   | *(required)*     | Agent name (used for delegation and invocation)        |
 | `description`     | string   | `Agent '<name>'` | Short description for the orchestrator's routing table |
 | `user_invocable`  | bool     | `true`           | Whether users can invoke this agent directly           |
-| `can_delegate_to` | string[] | `[]`             | Names of agents this agent may delegate work to        |
 
 **Config keys** (nested under `config:`):
 
@@ -159,7 +154,6 @@ You are a specialized agent that...
 
 | Key          | Type                   | Description                                       |
 | ------------ | ---------------------- | ------------------------------------------------- |
-| `use_when`   | string[]               | Scenarios where this agent should be delegated to |
 | `avoid_when` | string[]               | Scenarios where this agent is a poor fit          |
 | `triggers`   | map (keyword: meaning) | Keyword triggers the orchestrator can match on    |
 

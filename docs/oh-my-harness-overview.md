@@ -51,7 +51,7 @@ Multi-Agent Collaboration + Fully Extensible
 
 - **7 Built-in Agents** with division of labor (orchestrator routes → worker / oracle / explore / librarian / planner / reviewer execute)
 - **Markdown-as-Agent** — Zero-code custom agents (system prompt + routing + permissions)
-- **Smart Routing** — use_when / triggers / semantic matching for auto-delegation
+- **Smart Routing** — avoid_when / triggers / depth-based delegation
 - **Hot-pluggable Skills** — 4 activation modes (always / auto / semantic / manual)
 - **Multi-Protocol** — MCP (tools) + ACP (agent comms) + A2A (distributed)
 - **@file Mentions** — Gitignore-aware autocomplete file injection
@@ -130,9 +130,9 @@ Orchestrator (Primary)
     └─ Custom      ──→ User Agent (Zero-Code)
 ```
 
-- **use_when / avoid_when** — Scenario-based routing
+- **avoid_when** — Scenario-based routing exclusion
 - **triggers** — Keyword trigger matching
-- **can_delegate_to** — Delegation chain control
+- **Depth-based delegation** — Automatic delegation chain control
 - **Permission isolation** — Per-agent Allow/Deny/Ask
 
 </div>
@@ -151,8 +151,8 @@ config:
 permissions:
   allow: read_file, glob, grep
   deny: bash, write_file
-use_when:
-  - Security audit / vulnerability scan
+avoid_when:
+  - General coding / implementation tasks
 triggers:
   security: Security-related analysis
 ---
