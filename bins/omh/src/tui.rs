@@ -118,6 +118,7 @@ struct SuggestionState {
 enum SuggestionTrigger {
     Slash,
     Agent,
+    File,
     Model,
 }
 
@@ -557,6 +558,48 @@ impl App {
         items
     }
 
+    fn file_suggestions(partial: &str) -> Vec<Suggestion> {
+        let workspace_root = std::env::current_dir().unwrap_or_default();
+        // Strip leading "@" for path matching
+        let query = partial.strip_prefix('@').unwrap_or(partial).to_lowercase();
+        let mut items = Vec::new();
+        let walker = ignore::WalkBuilder::new(&workspace_root)
+            .hidden(true)
+            .max_depth(Some(8))
+            .build();
+        for entry in walker.flatten() {
+            if items.len() >= 50 {
+                break;
+            }
+            let Ok(rel) = entry.path().strip_prefix(&workspace_root) else {
+                continue;
+            };
+            let rel_str = rel.to_string_lossy();
+            if rel_str.is_empty() {
+                continue;
+            }
+            // Match against filename or full relative path
+            let rel_lower = rel_str.to_lowercase();
+            let file_name_lower = entry
+                .file_name()
+                .to_string_lossy()
+                .to_lowercase();
+            if query.is_empty()
+                || rel_lower.contains(&query)
+                || file_name_lower.starts_with(&query)
+            {
+                let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+                let suffix = if is_dir { "/" } else { "" };
+                items.push(Suggestion {
+                    label: format!("@{rel_str}{suffix}"),
+                    description: String::new(),
+                    needs_arg: false,
+                });
+            }
+        }
+        items
+    }
+
     fn update_suggestions(&mut self) -> Option<AppAction> {
         let input = &self.input;
 
@@ -582,16 +625,29 @@ impl App {
 
         if let Some(query) = mention_parser::active_mention_query(input, self.cursor_position) {
             let partial = query.typed_prefix.to_lowercase();
-            let filtered: Vec<Suggestion> = Self::agent_suggestions()
+
+            // Try agents first — agents are few and take priority
+            let agent_matches: Vec<Suggestion> = Self::agent_suggestions()
                 .into_iter()
                 .filter(|s| s.label.to_lowercase().starts_with(&partial) || partial == "@")
                 .collect();
 
-            if !filtered.is_empty() {
+            if !agent_matches.is_empty() {
                 self.suggestions = Some(SuggestionState {
                     selected: 0,
-                    items: filtered,
+                    items: agent_matches,
                     trigger: SuggestionTrigger::Agent,
+                });
+                return None;
+            }
+
+            // No agent match — fall back to file suggestions
+            let file_matches = Self::file_suggestions(&query.typed_prefix);
+            if !file_matches.is_empty() {
+                self.suggestions = Some(SuggestionState {
+                    selected: 0,
+                    items: file_matches,
+                    trigger: SuggestionTrigger::File,
                 });
                 return None;
             }
@@ -1579,7 +1635,7 @@ impl App {
                             self.suggestions = None;
                             return None;
                         }
-                        SuggestionTrigger::Agent => {
+                        SuggestionTrigger::Agent | SuggestionTrigger::File => {
                             if let Some(query) = mention_parser::active_mention_query(
                                 &self.input,
                                 self.cursor_position,

@@ -16,6 +16,7 @@ dialoguer = "0.11"
 crossterm = { workspace = true }
 dirs = { workspace = true }
 futures = { workspace = true }
+ignore = { workspace = true }
 mcp = { workspace = true }
 memory = { workspace = true }
 message = { workspace = true }

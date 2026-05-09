@@ -1411,6 +1411,7 @@ dependencies = [
  "dialoguer",
  "dirs",
  "futures",
+ "ignore",
  "mcp",
  "memory",
  "message",
