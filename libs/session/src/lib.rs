@@ -51,6 +51,15 @@ struct SessionHeader {
     pub output_tokens: u64,
 }
 
+/// Persistent runtime state stored as `state.json` alongside the session JSONL.
+/// Survives across `AgentRuntime` instances within the same session.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionState {
+    /// Monotonically increasing turn counter across all run_turn invocations.
+    #[serde(default)]
+    pub turn_counter: u32,
+}
+
 pub struct SessionManager {
     sessions_dir: PathBuf,
 }
@@ -91,6 +100,25 @@ impl SessionManager {
 
     pub fn tool_telemetry_path(&self, id: &str) -> PathBuf {
         self.session_dir(id).join("tool_telemetry.jsonl")
+    }
+
+    fn state_path(&self, id: &str) -> PathBuf {
+        self.session_dir(id).join("state.json")
+    }
+
+    pub fn load_state(&self, id: &str) -> SessionState {
+        let path = self.state_path(id);
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_state(&self, id: &str, state: &SessionState) -> Result<()> {
+        let path = self.state_path(id);
+        let json = serde_json::to_string(state)?;
+        fs::write(&path, json)?;
+        Ok(())
     }
 
     pub fn create(&self, agent: &str, model: &str, workspace_root: &Path) -> Result<Session> {

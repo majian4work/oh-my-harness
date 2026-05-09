@@ -344,7 +344,10 @@ impl AgentRuntime {
 
         let session = harness.session_manager.get(&self.session_id)?;
         let dump_dir = harness.session_manager.dump_dir(&self.session_id);
-        let dump_offset = max_dump_turn(&dump_dir, &executing_agent_name);
+
+        // Restore persisted turn counter so dumps don't overwrite across run_turn calls.
+        let mut session_state = harness.session_manager.load_state(&self.session_id);
+        self.current_turn = session_state.turn_counter;
 
         let memory_scopes = vec![
             Scope::Agent(executing_agent_name.clone()),
@@ -467,7 +470,7 @@ impl AgentRuntime {
             dump_turn(
                 &dump_dir,
                 &executing_agent_name,
-                self.current_turn + dump_offset,
+                self.current_turn,
                 "request",
                 &request,
             );
@@ -638,7 +641,7 @@ impl AgentRuntime {
             dump_turn(
                 &dump_dir,
                 &executing_agent_name,
-                self.current_turn + dump_offset,
+                self.current_turn,
                 "response",
                 &assistant_msg,
             );
@@ -826,7 +829,7 @@ impl AgentRuntime {
             dump_turn(
                 &dump_dir,
                 &executing_agent_name,
-                self.current_turn + dump_offset,
+                self.current_turn,
                 "tool_results",
                 &tool_result_msg,
             );
@@ -949,6 +952,12 @@ impl AgentRuntime {
                 error: Some(error.to_string()),
             },
         };
+
+        // Persist updated turn counter.
+        session_state.turn_counter = self.current_turn;
+        if let Err(e) = harness.session_manager.save_state(&self.session_id, &session_state) {
+            tracing::warn!(session_id = %self.session_id, error = %e, "failed to persist session state");
+        }
 
         let telemetry_path = harness.session_manager.telemetry_path(&self.session_id);
         if let Err(error) = telemetry.append_jsonl(&telemetry_path) {
@@ -1249,24 +1258,6 @@ fn sanitize_messages(messages: &mut Vec<Message>) {
             messages.remove(idx);
         }
     }
-}
-
-fn max_dump_turn(dump_dir: &PathBuf, agent_name: &str) -> u32 {
-    let agent_dir = dump_dir.join(agent_name);
-    std::fs::read_dir(&agent_dir)
-        .ok()
-        .and_then(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .filter_map(|e| {
-                    let name = e.file_name().to_string_lossy().to_string();
-                    name.strip_prefix("turn_")
-                        .and_then(|s| s.get(..3))
-                        .and_then(|s| s.parse::<u32>().ok())
-                })
-                .max()
-        })
-        .unwrap_or(0)
 }
 
 fn dump_turn(
