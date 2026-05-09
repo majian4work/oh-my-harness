@@ -290,6 +290,8 @@ impl Provider for AnthropicProvider {
         struct ModelEntry {
             id: String,
             display_name: Option<String>,
+            #[serde(default)]
+            max_input_tokens: Option<usize>,
         }
 
         let body: ModelsResponse = response.json().await?;
@@ -300,6 +302,7 @@ impl Provider for AnthropicProvider {
                 id: model.id,
                 name: model.display_name,
                 provider: self.name().to_string(),
+                context_window: model.max_input_tokens.filter(|&v| v > 0),
             })
             .collect();
         models.sort_by(|a, b| a.id.cmp(&b.id));

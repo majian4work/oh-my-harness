@@ -206,6 +206,7 @@ impl Provider for OpenAICompatProvider {
                 name: Some(model.id.clone()),
                 id: model.id,
                 provider: self.name().to_string(),
+                context_window: None,
             })
             .collect();
         models.sort_by(|a, b| a.id.cmp(&b.id));

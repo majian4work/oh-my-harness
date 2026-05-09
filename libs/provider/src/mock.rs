@@ -184,6 +184,7 @@ impl Provider for MockProvider {
             id: "mock-model".to_string(),
             name: Some("Mock Model".to_string()),
             provider: "mock".to_string(),
+            context_window: None,
         }])
     }
 }

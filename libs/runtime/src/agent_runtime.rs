@@ -145,12 +145,13 @@ impl AgentRuntime {
 
     async fn maybe_compact_messages(
         &self,
+        harness: &Harness,
         provider: &dyn provider::Provider,
         model_id: &str,
+        context_window: usize,
         system: &[SystemMessage],
         messages: &mut Vec<Message>,
     ) {
-        let context_window = provider.context_window(model_id);
         let system_tokens: usize = system
             .iter()
             .map(|s| message::estimate_tokens(&s.content))
@@ -182,6 +183,25 @@ impl AgentRuntime {
 
         if old_text.is_empty() {
             return;
+        }
+
+        // Save a snapshot before compaction so the full context is preserved.
+        match harness.session_manager.save_snapshot(
+            &self.session_id,
+            self.current_turn,
+            "pre_compact",
+            messages,
+        ) {
+            Ok(path) => {
+                tracing::info!(path = %path.display(), turn = self.current_turn, "snapshot saved before compaction");
+                harness.bus.publish(AgentEvent::SnapshotCreated {
+                    session_id: self.session_id.clone(),
+                    snapshot_id: format!("snapshot_{:03}_pre_compact", self.current_turn),
+                });
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to save pre-compaction snapshot");
+            }
         }
 
         let prompt = format!(
@@ -341,6 +361,7 @@ impl AgentRuntime {
             .get(provider_id)
             .with_context(|| format!("provider not registered: {provider_id}"))?;
         let model_id = resolved.model_id.clone();
+        let context_window = provider.context_window(&model_id);
 
         let session = harness.session_manager.get(&self.session_id)?;
         let dump_dir = harness.session_manager.dump_dir(&self.session_id);
@@ -450,7 +471,7 @@ impl AgentRuntime {
             }
             self.current_turn += 1;
 
-            self.maybe_compact_messages(provider, &model_id, &system, &mut messages).await;
+            self.maybe_compact_messages(harness, provider, &model_id, context_window, &system, &mut messages).await;
             sanitize_messages(&mut messages);
 
             let request = CompletionRequest {

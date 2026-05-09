@@ -63,6 +63,17 @@ pub struct SessionState {
     pub foreground_agent: Option<String>,
 }
 
+/// A snapshot of the conversation state at a specific point in time.
+/// Saved to `{session_dir}/snapshots/` to preserve context before compaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub session_id: String,
+    pub turn: u32,
+    pub reason: String,
+    pub created_at: i64,
+    pub messages: Vec<Message>,
+}
+
 pub struct SessionManager {
     sessions_dir: PathBuf,
 }
@@ -122,6 +133,34 @@ impl SessionManager {
         let json = serde_json::to_string(state)?;
         fs::write(&path, json)?;
         Ok(())
+    }
+
+    fn snapshot_dir(&self, id: &str) -> PathBuf {
+        self.session_dir(id).join("snapshots")
+    }
+
+    /// Save a snapshot of the conversation messages at the given turn.
+    pub fn save_snapshot(
+        &self,
+        id: &str,
+        turn: u32,
+        reason: &str,
+        messages: &[Message],
+    ) -> Result<PathBuf> {
+        let dir = self.snapshot_dir(id);
+        fs::create_dir_all(&dir)?;
+        let snapshot = Snapshot {
+            session_id: id.to_string(),
+            turn,
+            reason: reason.to_string(),
+            created_at: now_millis(),
+            messages: messages.to_vec(),
+        };
+        let filename = format!("snapshot_{turn:03}_{reason}.json");
+        let path = dir.join(&filename);
+        let json = serde_json::to_string(&snapshot)?;
+        fs::write(&path, &json)?;
+        Ok(path)
     }
 
     pub fn create(&self, agent: &str, model: &str, workspace_root: &Path) -> Result<Session> {

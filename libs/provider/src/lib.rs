@@ -46,6 +46,8 @@ pub struct ModelInfo {
     pub id: String,
     pub name: Option<String>,
     pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -309,4 +311,14 @@ pub fn infer_context_window(model_id: &str) -> usize {
     } else {
         128_000
     }
+}
+
+/// Look up context window from a list of `ModelInfo`, falling back to
+/// `infer_context_window` when no explicit value is available.
+pub fn lookup_context_window(models: &[ModelInfo], model_id: &str) -> usize {
+    models
+        .iter()
+        .find(|m| m.id == model_id)
+        .and_then(|m| m.context_window)
+        .unwrap_or_else(|| infer_context_window(model_id))
 }

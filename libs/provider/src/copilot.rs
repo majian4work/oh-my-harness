@@ -331,6 +331,7 @@ impl Provider for CopilotProvider {
                         .or_else(|| Some(id.clone())),
                     id,
                     provider: self.name().to_string(),
+                    context_window: None,
                 })
             })
             .collect();

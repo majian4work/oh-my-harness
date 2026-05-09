@@ -580,13 +580,8 @@ impl App {
             }
             // Match against filename or full relative path
             let rel_lower = rel_str.to_lowercase();
-            let file_name_lower = entry
-                .file_name()
-                .to_string_lossy()
-                .to_lowercase();
-            if query.is_empty()
-                || rel_lower.contains(&query)
-                || file_name_lower.starts_with(&query)
+            let file_name_lower = entry.file_name().to_string_lossy().to_lowercase();
+            if query.is_empty() || rel_lower.contains(&query) || file_name_lower.starts_with(&query)
             {
                 let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
                 let suffix = if is_dir { "/" } else { "" };
@@ -1641,10 +1636,8 @@ impl App {
                                 self.cursor_position,
                             ) {
                                 let replacement = format!("{selected} ");
-                                let new_cursor =
-                                    query.replace_range.start + replacement.len();
-                                self.input
-                                    .replace_range(query.replace_range, &replacement);
+                                let new_cursor = query.replace_range.start + replacement.len();
+                                self.input.replace_range(query.replace_range, &replacement);
                                 self.cursor_position = new_cursor;
                             }
                             self.suggestions = None;
@@ -1702,8 +1695,12 @@ impl App {
                             .iter()
                             .map(|a| a.name.clone())
                             .collect();
-                        let known: Vec<String> =
-                            h.agent_registry.all().iter().map(|a| a.name.clone()).collect();
+                        let known: Vec<String> = h
+                            .agent_registry
+                            .all()
+                            .iter()
+                            .map(|a| a.name.clone())
+                            .collect();
                         (explicit, known)
                     } else {
                         (vec![], vec![])
