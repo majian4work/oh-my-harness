@@ -30,8 +30,6 @@ pub enum EvolutionCmd {
     Log,
     Revert { id: String },
     Consolidate,
-    Pause,
-    Resume,
 }
 
 #[derive(Debug, Subcommand)]

@@ -146,12 +146,6 @@ pub async fn cmd_evolution(cmd: EvolutionCmd) -> Result<()> {
                 report.merged, report.pruned
             );
         }
-        EvolutionCmd::Pause => {
-            println!("Evolution paused (not persisted — restart re-enables).");
-        }
-        EvolutionCmd::Resume => {
-            println!("Evolution resumed.");
-        }
     }
 
     Ok(())
