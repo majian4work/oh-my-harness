@@ -80,7 +80,6 @@ pub struct AgentDefinition {
     pub model: Option<ModelSpec>,
     pub permission_rules: PermissionPolicy,
     pub max_turns: Option<u32>,
-    pub temperature: Option<f32>,
     #[serde(default)]
     pub effort: provider::Effort,
     pub metadata: AgentMetadata,
@@ -299,7 +298,6 @@ pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<Agen
     let mut model_id = None;
     let mut provider_id = None;
     let mut max_turns = None;
-    let mut temperature = None;
     let mut effort = provider::Effort::Default;
     let mut permission_level = PermissionLevel::ReadOnly;
 
@@ -314,13 +312,6 @@ pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<Agen
                     value
                         .parse::<u32>()
                         .with_context(|| format!("invalid max_turns value: {value}"))?,
-                )
-            }
-            "temperature" => {
-                temperature = Some(
-                    value
-                        .parse::<f32>()
-                        .with_context(|| format!("invalid temperature value: {value}"))?,
                 )
             }
             "effort" => effort = parse_effort(&value)?,
@@ -372,7 +363,6 @@ pub fn parse_agent_definition(content: &str, source: AgentSource) -> Result<Agen
         }),
         permission_rules,
         max_turns,
-        temperature,
         effort,
         metadata: AgentMetadata {
             avoid_when,
@@ -706,7 +696,6 @@ config:
   cost: cheap
   model: gpt-4o-mini
   max_turns: 30
-  temperature: 0.3
 permissions:
   allow: read_file, grep, glob
   deny: bash(rm:*)
@@ -726,7 +715,6 @@ Stay focused.
         assert_eq!(agent.mode, AgentMode::Subagent);
         assert_eq!(agent.tier, ModelTier::Cheap);
         assert_eq!(agent.max_turns, Some(30));
-        assert_eq!(agent.temperature, Some(0.3));
         assert_eq!(agent.model.unwrap().model_id, "gpt-4o-mini");
         assert_eq!(
             agent.permission_rules.default_level,
@@ -755,7 +743,6 @@ config:
   cost: expensive
   model: claude-sonnet-4.6
   max_turns: 50
-  temperature: 0.1
 avoid_when:
   - Task requires editing files.
 triggers:
@@ -772,7 +759,6 @@ You are the meta agent.
         assert_eq!(agent.mode, AgentMode::Subagent);
         assert_eq!(agent.tier, ModelTier::Premium);
         assert_eq!(agent.max_turns, Some(50));
-        assert_eq!(agent.temperature, Some(0.1));
         assert_eq!(agent.model.unwrap().model_id, "claude-sonnet-4.6");
         assert_eq!(
             agent.metadata.avoid_when,

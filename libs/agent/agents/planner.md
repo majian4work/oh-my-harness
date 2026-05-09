@@ -7,7 +7,6 @@ config:
   mode: primary
   tier: premium
   max_turns: 80
-  temperature: 0.1
   effort: high
 avoid_when:
   - The task should be implemented directly instead of planned in detail.

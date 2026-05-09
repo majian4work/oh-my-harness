@@ -444,7 +444,7 @@ impl AgentRuntime {
                 system: system.clone(),
                 messages: messages.clone(),
                 tools: tools.clone(),
-                temperature: agent.temperature,
+                temperature: None,
                 max_tokens: None,
                 effort: self.effort_override.unwrap_or(agent.effort),
             };

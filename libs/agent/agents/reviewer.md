@@ -7,7 +7,6 @@ config:
   mode: subagent
   tier: premium
   max_turns: 50
-  temperature: 0.1
 avoid_when:
   - The task is still in the planning or implementation phase.
 triggers:

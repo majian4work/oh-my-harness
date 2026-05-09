@@ -7,7 +7,6 @@ config:
   mode: subagent
   tier: cheap
   max_turns: 30
-  temperature: 0.0
   effort: low
 avoid_when:
   - You need external documentation, web research, or implementation changes.

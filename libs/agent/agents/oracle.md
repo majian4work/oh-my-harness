@@ -7,7 +7,6 @@ config:
   mode: subagent
   tier: premium
   max_turns: 50
-  temperature: 0.1
   effort: high
 avoid_when:
   - The delegated task requires editing files or executing changes.

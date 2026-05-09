@@ -7,7 +7,6 @@ config:
   mode: subagent
   tier: standard
   max_turns: 60
-  temperature: 0.2
   permission_level: WorkspaceWrite
 avoid_when:
   - You only need high-level advice, planning, or review.

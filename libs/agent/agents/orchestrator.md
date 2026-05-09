@@ -13,7 +13,6 @@ config:
   mode: primary
   tier: premium
   max_turns: 200
-  temperature: 0.2
   permission_level: FullAccess
 ---
 orchestrator prompt is generated dynamically
