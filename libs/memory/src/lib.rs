@@ -181,10 +181,7 @@ impl MarkdownMemoryStore {
                 }
                 "reinforcement_count" => {
                     reinforcement_count = Some(value.parse::<u32>().with_context(|| {
-                        format!(
-                            "invalid reinforcement_count in {}: {value}",
-                            path.display()
-                        )
+                        format!("invalid reinforcement_count in {}: {value}", path.display())
                     })?)
                 }
                 "supersedes" => {
@@ -218,7 +215,10 @@ impl MarkdownMemoryStore {
             confidence: confidence
                 .ok_or_else(|| anyhow!("memory entry {} missing confidence", path.display()))?,
             reinforcement_count: reinforcement_count.ok_or_else(|| {
-                anyhow!("memory entry {} missing reinforcement_count", path.display())
+                anyhow!(
+                    "memory entry {} missing reinforcement_count",
+                    path.display()
+                )
             })?,
             supersedes: supersedes
                 .ok_or_else(|| anyhow!("memory entry {} missing supersedes", path.display()))?,
@@ -246,9 +246,15 @@ impl MarkdownMemoryStore {
     fn find_entry(&self, id: Ulid) -> Result<(PathBuf, MemoryEntry)> {
         let encoded_id = id.to_string();
         let patterns = [
-            self.base_dir.join("global").join(format!("{encoded_id}.md")),
-            self.base_dir.join("project/*").join(format!("{encoded_id}.md")),
-            self.base_dir.join("agent/*").join(format!("{encoded_id}.md")),
+            self.base_dir
+                .join("global")
+                .join(format!("{encoded_id}.md")),
+            self.base_dir
+                .join("project/*")
+                .join(format!("{encoded_id}.md")),
+            self.base_dir
+                .join("agent/*")
+                .join(format!("{encoded_id}.md")),
         ];
 
         for pattern in patterns {
@@ -302,9 +308,17 @@ impl MemoryStore for MarkdownMemoryStore {
 
                 let intersection = query_tokens.intersection(&content_tokens).count();
                 let union = query_tokens.union(&content_tokens).count();
-                let jaccard = if union > 0 { intersection as f32 / union as f32 } else { 0.0 };
+                let jaccard = if union > 0 {
+                    intersection as f32 / union as f32
+                } else {
+                    0.0
+                };
 
-                let substring_bonus = if content_lower.contains(&query_lower) { 0.3 } else { 0.0 };
+                let substring_bonus = if content_lower.contains(&query_lower) {
+                    0.3
+                } else {
+                    0.0
+                };
 
                 let score = jaccard + substring_bonus;
                 if score > 0.0 {
@@ -699,7 +713,9 @@ mod tests {
         assert!(!recalled.is_empty());
         assert_eq!(recalled[0].id, entry.id);
 
-        let recalled2 = store.recall("分析一下oh-my-openagent的架构", &scope, 10).await;
+        let recalled2 = store
+            .recall("分析一下oh-my-openagent的架构", &scope, 10)
+            .await;
         assert!(recalled2.is_ok());
         fs::remove_dir_all(temp_dir)?;
         Ok(())

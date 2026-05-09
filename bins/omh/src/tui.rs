@@ -34,7 +34,7 @@ use runtime::SessionRuntime;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
-use crate::auth::{OmhConfig, configured_provider_names};
+use crate::auth::configured_provider_names;
 use crate::slash::{self, SlashResult};
 
 type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
@@ -200,11 +200,10 @@ impl App {
     fn new() -> Result<Self> {
         let mut harness = crate::init_harness()?;
         crate::run::register_providers_from_env(&mut harness)?;
-        let (provider_id, model_id) = resolve_active_model(&harness);
-        let effort = OmhConfig::load()
-            .ok()
-            .and_then(|c| c.effort)
-            .unwrap_or_default();
+        let defaults = crate::run::resolve_defaults(&harness);
+        let provider_id = defaults.provider_id;
+        let model_id = defaults.model_id;
+        let effort = defaults.effort;
         let bus_rx = Some(harness.bus.subscribe());
         let harness = Arc::new(harness);
 
@@ -2754,40 +2753,6 @@ fn git_status_for_repo(repo_path: &std::path::Path, label: &str) -> Option<GitRe
         root: label.to_string(),
         files,
     })
-}
-
-fn resolve_active_model(harness: &runtime::Harness) -> (String, String) {
-    // 1. Config.toml active_model (user's global default)
-    if let Ok(config) = OmhConfig::load() {
-        if let Some(active) = &config.active_model {
-            if harness
-                .provider_registry
-                .get(&active.provider_id)
-                .is_some()
-            {
-                return (active.provider_id.clone(), active.model_id.clone());
-            }
-        }
-    }
-
-    // 2. Agent spec → provider registry resolve
-    let agent_spec = harness
-        .agent_registry
-        .get(DEFAULT_AGENT)
-        .and_then(|a| a.model.as_ref())
-        .map(|m| provider::ModelSpec {
-            model_id: m.model_id.clone(),
-            provider_id: m.provider_id.clone(),
-        });
-
-    if let Some(resolved) = harness
-        .provider_registry
-        .resolve_model(agent_spec.as_ref(), None)
-    {
-        return (resolved.provider_id, resolved.model_id);
-    }
-
-    (String::new(), String::new())
 }
 
 pub async fn run_tui(continue_last: bool, resume_pick: bool) -> Result<()> {

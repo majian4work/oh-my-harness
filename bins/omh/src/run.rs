@@ -5,6 +5,57 @@ use runtime::AgentRuntime;
 
 use crate::{auth, init_harness};
 
+/// Resolved default model and effort from config + provider registry.
+pub struct Defaults {
+    pub provider_id: String,
+    pub model_id: String,
+    pub effort: provider::Effort,
+}
+
+/// Resolve active model and effort from config.toml → agent spec → provider default.
+pub fn resolve_defaults(harness: &runtime::Harness) -> Defaults {
+    let config = auth::OmhConfig::load().unwrap_or_default();
+    let effort = config.effort.unwrap_or_default();
+
+    // 1. Config.toml active_model
+    if let Some(active) = &config.active_model {
+        if harness.provider_registry.get(&active.provider_id).is_some() {
+            return Defaults {
+                provider_id: active.provider_id.clone(),
+                model_id: active.model_id.clone(),
+                effort,
+            };
+        }
+    }
+
+    // 2. Agent spec → provider registry resolve
+    let agent_spec = harness
+        .agent_registry
+        .get("orchestrator")
+        .and_then(|a| a.model.as_ref())
+        .map(|m| provider::ModelSpec {
+            model_id: m.model_id.clone(),
+            provider_id: m.provider_id.clone(),
+        });
+
+    if let Some(resolved) = harness
+        .provider_registry
+        .resolve_model(agent_spec.as_ref(), None)
+    {
+        return Defaults {
+            provider_id: resolved.provider_id,
+            model_id: resolved.model_id,
+            effort,
+        };
+    }
+
+    Defaults {
+        provider_id: String::new(),
+        model_id: String::new(),
+        effort,
+    }
+}
+
 /// Default omt endpoint to probe.
 const DEFAULT_OMT_ENDPOINT: &str = "http://127.0.0.1:9120";
 
@@ -17,6 +68,8 @@ pub async fn run_oneshot(
 ) -> Result<()> {
     let mut harness = init_harness()?;
     register_providers_from_env(&mut harness)?;
+
+    let defaults = resolve_defaults(&harness);
 
     let workspace_root = std::env::current_dir()?;
     harness.connect_mcp_servers(&workspace_root);
@@ -58,7 +111,7 @@ pub async fn run_oneshot(
     let effort_level = match effort {
         "low" => provider::Effort::Low,
         "high" => provider::Effort::High,
-        _ => provider::Effort::Default,
+        _ => defaults.effort,
     };
 
     let runtime = AgentRuntime::new(
@@ -69,17 +122,25 @@ pub async fn run_oneshot(
     let mut runtime = runtime.with_logger(&harness);
     runtime.interactive = false;
     runtime.effort_override = Some(effort_level).filter(|e| *e != provider::Effort::Default);
-    if let Some(model_str) = model {
+
+    // Model: CLI arg → config default
+    let model_override = if let Some(model_str) = model {
         let (provider_id, model_id) = if let Some((p, m)) = model_str.split_once('/') {
             (Some(p.to_string()), m.to_string())
         } else {
             (None, model_str.to_string())
         };
-        runtime.model_override = Some(provider::ModelSpec {
+        provider::ModelSpec {
             model_id,
             provider_id,
-        });
-    }
+        }
+    } else {
+        provider::ModelSpec {
+            model_id: defaults.model_id,
+            provider_id: Some(defaults.provider_id),
+        }
+    };
+    runtime.model_override = Some(model_override);
 
     let start = std::time::Instant::now();
     let result = runtime.run_turn(&harness, prompt).await?;

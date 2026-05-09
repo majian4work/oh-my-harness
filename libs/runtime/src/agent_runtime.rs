@@ -864,9 +864,12 @@ impl AgentRuntime {
             harness.hook_runner.run(HookPoint::OnTurnEnd, &mut hook_ctx).await;
         }
 
-        // Evolution: extract learnings from the turn (best-effort)
-        // Only extract when there was substantial work (>= 3 tool calls in a completed turn)
-        if completed && total_tool_calls >= 3 {
+        // Evolution: periodic extraction + consolidation (best-effort)
+        // Only run at consolidation intervals to avoid per-turn LLM overhead.
+        if completed
+            && total_tool_calls >= 3
+            && self.current_turn % harness.evolution.policy().consolidation_interval == 0
+        {
             let scope = Scope::Agent(executing_agent_name.clone());
             let prepared = harness.evolution.prepare_extraction_request(&messages, &self.session_id, &scope);
             match provider.complete(prepared.request).await {
@@ -889,22 +892,19 @@ impl AgentRuntime {
                 Err(e) => tracing::debug!(error = %e, "evolution: extraction LLM call failed"),
             }
 
-            // Periodic consolidation
-            if self.current_turn % harness.evolution.policy().consolidation_interval == 0 {
-                let scope = Scope::Global;
-                match harness.evolution.consolidate(&scope) {
-                    Ok(report) => {
-                        if report.merged > 0 || report.pruned > 0 {
-                            tracing::info!(
-                                merged = report.merged,
-                                pruned = report.pruned,
-                                strengthened = report.strengthened,
-                                "evolution: consolidation completed"
-                            );
-                        }
+            let scope = Scope::Global;
+            match harness.evolution.consolidate(&scope) {
+                Ok(report) => {
+                    if report.merged > 0 || report.pruned > 0 {
+                        tracing::info!(
+                            merged = report.merged,
+                            pruned = report.pruned,
+                            strengthened = report.strengthened,
+                            "evolution: consolidation completed"
+                        );
                     }
-                    Err(e) => tracing::debug!(error = %e, "evolution: consolidation failed"),
                 }
+                Err(e) => tracing::debug!(error = %e, "evolution: consolidation failed"),
             }
         }
 

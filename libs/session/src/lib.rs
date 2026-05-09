@@ -133,13 +133,6 @@ impl SessionManager {
                 return state;
             }
         }
-        // Backward compat: try legacy state.json
-        let legacy = self.session_dir(id).join("state.json");
-        if let Ok(content) = fs::read_to_string(&legacy) {
-            if let Ok(state) = serde_json::from_str::<SessionState>(&content) {
-                return state;
-            }
-        }
         SessionState::default()
     }
 
