@@ -54,6 +54,9 @@ Multi-Agent Collaboration + Fully Extensible
 - **Smart Routing** — use_when / triggers / semantic matching for auto-delegation
 - **Hot-pluggable Skills** — 4 activation modes (always / auto / semantic / manual)
 - **Multi-Protocol** — MCP (tools) + ACP (agent comms) + A2A (distributed)
+- **@file Mentions** — Gitignore-aware autocomplete file injection
+- **Per-Session State** — Model/effort persisted in state.toml across restarts
+- **Config Resolution** — Project `.omh/config.toml` > Global `~/.config/omh/config.toml`
 
 </div>
 <div class="col">
@@ -65,6 +68,8 @@ Task Decomposition → DAG Scheduling → Team Collaboration
 - **LLM-driven** automatic task DAG planning
 - **Git Worktree** branch-isolated parallel execution
 - **A2A Distributed Teams** — multiple omh instances cooperate
+- **TUI Dashboard** — team members panel + recent runs panel
+- **Team Health** — auto-expire stale members (heartbeat timeout)
 - **Resumable Runs** + exponential backoff retry
 - **Token Budgeting** with fine-grained control
 
@@ -91,7 +96,8 @@ Task Decomposition → DAG Scheduling → Team Collaboration
 │  └───────────┘ └───────────┘ └───────────┘ └───────────┘       │
 │                                                                  │
 │  ┌─── Cross-Cutting Concerns ───────────────────────────────┐   │
-│  │ Hook Pipeline │ Permission │ EventBus │ Memory │ Evolution│   │
+│  │ Hook │ Permission │ EventBus │ Memory │ Evolution│ Config│   │
+│  │ Session (state.toml) │ Trace │ Telemetry               │   │
 │  └───────────────────────────────────────────────────────────┘   │
 ├──────────────────────────────────────────────────────────────────┤
 │                      Extension Protocols                          │
@@ -99,6 +105,7 @@ Task Decomposition → DAG Scheduling → Team Collaboration
 ├──────────────────────────────────────────────────────────────────┤
 │                    omt — Task Orchestrator                        │
 │    Planner → DAG Scheduler → Executor → Team Dispatcher          │
+│    TUI Dashboard: Team Members │ Recent Runs │ Task DAG           │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -205,7 +212,7 @@ You are a security audit specialist...
                     └── Timeout → Reschedule task
 ```
 
-**Key Points:** Git Worktree Isolation · Round-Robin LB · Token Budget · Resumable · Graceful Degradation
+**Key Points:** Git Worktree Isolation · Round-Robin LB · Token Budget · Resumable · Stale Member Expiry · TUI Dashboard
 
 ---
 
@@ -246,7 +253,7 @@ headers = { Authorization = "Bearer ..." }
 
 **Memory System:**
 - Markdown knowledge base (Project / Global scope)
-- Fuzzy retrieval → auto-inject relevant knowledge
+- Fuzzy retrieval → auto-inject via confidence + reinforcement filter
 - Context window 80% → automatic summarization
 
 **Self-Evolution Engine:**
@@ -256,6 +263,9 @@ User Correction → Extract Rule → Confidence++
               High-confidence → Inject into context
               Low-confidence  → Await more validation
 ```
+- **Heuristic gating**: ≥5 tool calls + ≥6 messages before extraction
+- **Periodic consolidation** every 50 turns (merge duplicates, prune low-confidence)
+- **Injection filter**: confidence ≥ 0.6 AND reinforcement ≥ 2
 
 ### 🛡️ Permission & Hook Pipeline
 
@@ -321,7 +331,7 @@ disallow_error_categories = ["timeout"]
 
 ### 📐 Design Philosophy
 
-- **🧩 18-Crate Modular** — Single responsibility, independent builds
+- **🧩 20-Crate Modular** — Single responsibility, independent builds
 - **🔌 Fully Pluggable** — Provider / Tool / Agent / Skill / Hook
 - **📝 Markdown-as-Config** — Agent + Skill + Memory, zero code
 - **🔄 Progressive Enhancement** — Local → Distributed seamlessly
