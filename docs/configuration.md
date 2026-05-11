@@ -107,7 +107,7 @@ config:
   model: gpt-4.1
   provider: openai
   max_turns: 10
-  temperature: 0.7
+  effort: high
   permission_level: WorkspaceWrite
 permissions:
   allow: read_file, glob, grep
@@ -137,7 +137,7 @@ You are a specialized agent that...
 | `model`            | model ID string                            | —          | Specific model to use                              |
 | `provider`         | provider ID string                         | —          | Specific provider to use                           |
 | `max_turns`        | integer                                    | —          | Maximum tool-call loops per turn                   |
-| `temperature`      | float (0.0–2.0)                            | —          | LLM sampling temperature                           |
+| `effort`           | `low`, `default`, `high`                   | `default`  | LLM reasoning effort level                         |
 | `permission_level` | `ReadOnly`, `WorkspaceWrite`, `FullAccess` | `ReadOnly` | Default tool permission level                      |
 
 **Permission keys** (nested under `permissions:`):
